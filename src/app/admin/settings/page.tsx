@@ -27,7 +27,6 @@ interface SystemSettings {
   attendance: {
     workHours: number;
     overtimeRate: number;
-    gracePeriod: number;
     autoCheckout: boolean;
     checkInStart: string;
     checkInEnd: string;
@@ -89,7 +88,6 @@ export default function SystemSettings() {
     attendance: {
       workHours: 8,
       overtimeRate: 1.5,
-      gracePeriod: 15,
       autoCheckout: true,
       checkInStart: '08:00',
       checkInEnd: '10:00',
@@ -558,13 +556,7 @@ function AttendanceSettings({ settings, onChange }: {
         }
         break;
       
-      case 'gracePeriod':
-        if (value < 0 || value > 60) {
-          newErrors.gracePeriod = 'Grace period must be between 0 and 60 minutes';
-        } else {
-          delete newErrors.gracePeriod;
-        }
-        break;
+      
       
       default:
         break;
@@ -626,7 +618,6 @@ function AttendanceSettings({ settings, onChange }: {
   const allRequiredFieldsFilled = [
     settings.workHours,
     settings.overtimeRate,
-    settings.gracePeriod,
     settings.checkInStart,
     settings.checkInEnd,
     settings.checkOutStart,
@@ -684,10 +675,7 @@ function AttendanceSettings({ settings, onChange }: {
             <span className="text-gray-600">Overtime Rate:</span>
             <span className="ml-2 font-medium">{settings.overtimeRate}x</span>
           </div>
-          <div>
-            <span className="text-gray-600">Grace Period:</span>
-            <span className="ml-2 font-medium">{settings.gracePeriod}min</span>
-          </div>
+          {/* Grace period removed from UI and calculations */}
         </div>
       </div>
 
@@ -734,25 +722,7 @@ function AttendanceSettings({ settings, onChange }: {
           <p className="mt-1 text-xs text-gray-500">Multiplier for overtime pay calculation</p>
         </div>
         
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Grace Period (Minutes) *
-          </label>
-          <input
-            type="number"
-            min="0"
-            max="60"
-            value={settings.gracePeriod}
-            onChange={(e) => handleFieldChange('gracePeriod', parseInt(e.target.value))}
-            className={`w-full px-3 py-2 border rounded-md focus:ring-indigo-500 focus:border-indigo-500 ${
-              errors.gracePeriod ? 'border-red-300' : 'border-gray-300'
-            }`}
-          />
-          {errors.gracePeriod && (
-            <p className="mt-1 text-xs text-red-600">{errors.gracePeriod}</p>
-          )}
-          <p className="mt-1 text-xs text-gray-500">Allowed late arrival without penalty</p>
-        </div>
+        {/* Grace Period removed */}
         
         <div className="flex items-center">
           <input
@@ -1201,104 +1171,597 @@ function NotificationSettings({ settings, onChange }: {
   );
 }
 
-// Security Settings Component
+// Updated SecuritySettings component
 function SecuritySettings({ settings, onChange }: {
   settings: SystemSettings['security'];
   onChange: (security: SystemSettings['security']) => void;
 }) {
+  const [ipTitle, setIpTitle] = useState('');
+  const [ipInput, setIpInput] = useState('');
+  const [geoTitle, setGeoTitle] = useState('');
+  const [geoLat, setGeoLat] = useState('');
+  const [geoLng, setGeoLng] = useState('');
+  const [geoRadius, setGeoRadius] = useState('500');
+  
+  const [employees, setEmployees] = useState<Array<{ id: string; firstName: string; lastName: string; employeeId: string }>>([]);
+  const [ipRestrictions, setIpRestrictions] = useState<any[]>([]);
+  const [geoRestrictions, setGeoRestrictions] = useState<any[]>([]);
+  const [employeeAssignments, setEmployeeAssignments] = useState<any[]>([]);
+
+  const [assignEmployeeId, setAssignEmployeeId] = useState('');
+  const [assignType, setAssignType] = useState<'IP' | 'GEO'>('IP');
+  const [assignRestrictionId, setAssignRestrictionId] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchAuxData();
+  }, []);
+
+  const fetchAuxData = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const [empRes, ipRes, geoRes, assignRes] = await Promise.all([
+        fetch('/api/admin/employees', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/admin/security/ip-restrictions', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/admin/security/geo-restrictions', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/admin/security/assignments', { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+
+      if (empRes.ok) {
+        const data = await empRes.json();
+        setEmployees(data.employees || []);
+      }
+      if (ipRes.ok) {
+        const data = await ipRes.json();
+        setIpRestrictions(data.restrictions || []);
+      }
+      if (geoRes.ok) {
+        const data = await geoRes.json();
+        setGeoRestrictions(data.restrictions || []);
+      }
+      if (assignRes.ok) {
+        const data = await assignRes.json();
+        setEmployeeAssignments(data.assignments || []);
+      }
+    } catch (err) {
+      console.error('Failed to load security data', err);
+      alert('Failed to load security data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createIpRestriction = async () => {
+    const ips = ipInput.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (!ipTitle || ips.length === 0) {
+      alert('Please provide a title and at least one IP address');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch('/api/admin/security/ip-restrictions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ title: ipTitle, ips }),
+      });
+
+      if (response.ok) {
+        alert('IP restriction created successfully');
+        setIpTitle('');
+        setIpInput('');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to create IP restriction');
+      }
+    } catch (error) {
+      console.error('Failed to create IP restriction:', error);
+      alert('Failed to create IP restriction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createGeoRestriction = async () => {
+    const lat = parseFloat(geoLat);
+    const lng = parseFloat(geoLng);
+    const radius = parseInt(geoRadius);
+
+    if (!geoTitle || isNaN(lat) || isNaN(lng) || isNaN(radius)) {
+      alert('Please provide valid geo details');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch('/api/admin/security/geo-restrictions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title: geoTitle,
+          latitude: lat,
+          longitude: lng,
+          radius_meters: radius,
+        }),
+      });
+
+      if (response.ok) {
+        alert('Geo restriction created successfully');
+        setGeoTitle('');
+        setGeoLat('');
+        setGeoLng('');
+        setGeoRadius('500');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to create geo restriction');
+      }
+    } catch (error) {
+      console.error('Failed to create geo restriction:', error);
+      alert('Failed to create geo restriction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteIpRestriction = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this IP restriction?')) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch(`/api/admin/security/ip-restrictions/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        alert('IP restriction deleted successfully');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to delete IP restriction');
+      }
+    } catch (error) {
+      console.error('Failed to delete IP restriction:', error);
+      alert('Failed to delete IP restriction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteGeoRestriction = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this geo restriction?')) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch(`/api/admin/security/geo-restrictions/${id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        alert('Geo restriction deleted successfully');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to delete geo restriction');
+      }
+    } catch (error) {
+      console.error('Failed to delete geo restriction:', error);
+      alert('Failed to delete geo restriction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const assignRestriction = async () => {
+    if (!assignEmployeeId || !assignRestrictionId) {
+      alert('Please select both employee and restriction');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch('/api/admin/security/assign', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          employee_id: assignEmployeeId,
+          restriction_type: assignType,
+          restriction_id: assignRestrictionId,
+        }),
+      });
+
+      if (response.ok) {
+        alert('Restriction assigned to employee successfully');
+        setAssignEmployeeId('');
+        setAssignRestrictionId('');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to assign restriction');
+      }
+    } catch (error) {
+      console.error('Failed to assign restriction:', error);
+      alert('Failed to assign restriction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const unassignRestriction = async (assignmentId: string) => {
+    if (!confirm('Are you sure you want to remove this restriction assignment?')) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch(`/api/admin/security/assign/${assignmentId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        alert('Restriction assignment removed successfully');
+        fetchAuxData();
+      } else {
+        const error = await response.json();
+        alert(error.error || 'Failed to remove assignment');
+      }
+    } catch (error) {
+      console.error('Failed to remove assignment:', error);
+      alert('Failed to remove assignment');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getEmployeeName = (employeeId: string) => {
+    const employee = employees.find(emp => emp.id === employeeId);
+    return employee ? `${employee.firstName} ${employee.lastName} (${employee.employeeId})` : 'Unknown Employee';
+  };
+
+  const getRestrictionDetails = (assignment: any) => {
+    if (assignment.restriction_type === 'IP') {
+      const restriction = ipRestrictions.find(r => r.id === assignment.restriction_id);
+      return restriction ? `${restriction.title} (${restriction.allowed_ips?.length || 0} IPs)` : 'Unknown IP Restriction';
+    } else {
+      const restriction = geoRestrictions.find(r => r.id === assignment.restriction_id);
+      return restriction ? `${restriction.title} (${restriction.latitude}, ${restriction.longitude})` : 'Unknown Geo Restriction';
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-gray-900">Security Settings</h2>
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Session Timeout (Minutes)
-          </label>
-          <input
-            type="number"
-            min="5"
-            max="480"
-            value={settings.sessionTimeout}
-            onChange={(e) => onChange({ ...settings, sessionTimeout: parseInt(e.target.value) })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-          />
+      <h2 className="text-lg font-semibold text-gray-900">IP & Geo Restriction Management</h2>
+
+      {loading && (
+        <div className="flex items-center justify-center p-4">
+          <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+          <span className="ml-2 text-sm text-gray-600">Loading...</span>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Password Expiry (Days)
-          </label>
-          <input
-            type="number"
-            min="0"
-            max="365"
-            value={settings.passwordExpiry}
-            onChange={(e) => onChange({ ...settings, passwordExpiry: parseInt(e.target.value) })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-          />
-          {settings.passwordExpiry === 0 && (
-            <p className="mt-1 text-sm text-gray-500">Passwords never expire</p>
-          )}
+      )}
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Create IP Restriction */}
+        <div className="bg-white border border-gray-200 rounded-lg p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Create IP Restriction</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Title *
+              </label>
+              <input
+                type="text"
+                value={ipTitle}
+                onChange={(e) => setIpTitle(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="e.g., Office Network"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Allowed IPs/CIDR *
+              </label>
+              <textarea
+                value={ipInput}
+                onChange={(e) => setIpInput(e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="192.168.1.100&#10;10.0.0.0/24&#10;172.16.1.50"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Enter one IP or CIDR range per line, or separate with commas
+              </p>
+            </div>
+            <button
+              onClick={createIpRestriction}
+              disabled={loading}
+              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+            >
+              Create IP Restriction
+            </button>
+          </div>
         </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Maximum Login Attempts
-          </label>
-          <input
-            type="number"
-            min="1"
-            max="10"
-            value={settings.loginAttempts}
-            onChange={(e) => onChange({ ...settings, loginAttempts: parseInt(e.target.value) })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-          />
-        </div>
-        <div className="flex items-center">
-          <input
-            type="checkbox"
-            checked={settings.twoFactorAuth}
-            onChange={(e) => onChange({ ...settings, twoFactorAuth: e.target.checked })}
-            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-          />
-          <label className="ml-2 block text-sm text-gray-700">
-            Enable Two-Factor Authentication
-          </label>
+
+        {/* Create Geo Restriction */}
+        <div className="bg-white border border-gray-200 rounded-lg p-6">
+          <h3 className="text-lg font-medium text-gray-900 mb-4">Create Geo Restriction</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Title *
+              </label>
+              <input
+                type="text"
+                value={geoTitle}
+                onChange={(e) => setGeoTitle(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="e.g., Main Office Location"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Latitude *
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={geoLat}
+                  onChange={(e) => setGeoLat(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="40.7128"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Longitude *
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={geoLng}
+                  onChange={(e) => setGeoLng(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="-74.0060"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Radius (meters) *
+              </label>
+              <input
+                type="number"
+                value={geoRadius}
+                onChange={(e) => setGeoRadius(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="500"
+              />
+            </div>
+            <button
+              onClick={createGeoRestriction}
+              disabled={loading}
+              className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+            >
+              Create Geo Restriction
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="border-t pt-6">
-        <h3 className="text-md font-medium text-gray-900 mb-4">IP Whitelist</h3>
-        <div className="space-y-3">
-          {settings.ipWhitelist.map((ip, index) => (
-            <div key={index} className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={ip}
-                onChange={(e) => {
-                  const newIps = [...settings.ipWhitelist];
-                  newIps[index] = e.target.value;
-                  onChange({ ...settings, ipWhitelist: newIps });
-                }}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
-                placeholder="192.168.1.1"
-              />
-              <button
-                onClick={() => {
-                  const newIps = settings.ipWhitelist.filter((_, i) => i !== index);
-                  onChange({ ...settings, ipWhitelist: newIps });
-                }}
-                className="p-2 text-red-600 hover:bg-red-50 rounded"
-              >
-                <XCircleIcon className="w-5 h-5" />
-              </button>
-            </div>
-          ))}
+      {/* Assign Restriction to Employee */}
+      <div className="bg-white border border-gray-200 rounded-lg p-6">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Assign Restriction to Employee</h3>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Employee *
+            </label>
+            <select
+              value={assignEmployeeId}
+              onChange={(e) => setAssignEmployeeId(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="">Select Employee</option>
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.firstName} {emp.lastName} ({emp.employeeId})
+                </option>
+              ))}
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Restriction Type *
+            </label>
+            <select
+              value={assignType}
+              onChange={(e) => {
+                setAssignType(e.target.value as 'IP' | 'GEO');
+                setAssignRestrictionId('');
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="IP">IP Restriction</option>
+              <option value="GEO">Geo Restriction</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Available Restrictions *
+            </label>
+            <select
+              value={assignRestrictionId}
+              onChange={(e) => setAssignRestrictionId(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="">Select Restriction</option>
+              {assignType === 'IP' && ipRestrictions.map(restriction => (
+                <option key={restriction.id} value={restriction.id}>
+                  {restriction.title} ({restriction.allowed_ips?.length || 0} IPs)
+                </option>
+              ))}
+              {assignType === 'GEO' && geoRestrictions.map(restriction => (
+                <option key={restriction.id} value={restriction.id}>
+                  {restriction.title} ({restriction.latitude}, {restriction.longitude})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        
+        <div className="mt-4 flex justify-end">
           <button
-            onClick={() => onChange({ ...settings, ipWhitelist: [...settings.ipWhitelist, ''] })}
-            className="flex items-center px-3 py-2 text-sm text-indigo-600 hover:text-indigo-800"
+            onClick={assignRestriction}
+            disabled={loading || !assignEmployeeId || !assignRestrictionId}
+            className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
           >
-            <CheckCircleIcon className="w-4 h-4 mr-1" />
-            Add IP Address
+            Assign Restriction
           </button>
+        </div>
+      </div>
+
+      {/* Existing Restrictions */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* IP Restrictions List */}
+        <div className="bg-white border border-gray-200 rounded-lg">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900">IP Restrictions</h3>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {ipRestrictions.length === 0 ? (
+              <div className="px-6 py-4 text-center text-gray-500">
+                No IP restrictions created
+              </div>
+            ) : (
+              ipRestrictions.map(restriction => (
+                <div key={restriction.id} className="px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-gray-900">{restriction.title}</h4>
+                      <p className="text-sm text-gray-500 mt-1">
+                        {restriction.allowed_ips?.join(', ') || 'No IPs configured'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Created: {new Date(restriction.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteIpRestriction(restriction.id)}
+                      disabled={loading}
+                      className="ml-4 px-3 py-1 text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Geo Restrictions List */}
+        <div className="bg-white border border-gray-200 rounded-lg">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-medium text-gray-900">Geo Restrictions</h3>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {geoRestrictions.length === 0 ? (
+              <div className="px-6 py-4 text-center text-gray-500">
+                No geo restrictions created
+              </div>
+            ) : (
+              geoRestrictions.map(restriction => (
+                <div key={restriction.id} className="px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-gray-900">{restriction.title}</h4>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Lat: {restriction.latitude}, Lng: {restriction.longitude}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        Radius: {restriction.radius_meters} meters
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Created: {new Date(restriction.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteGeoRestriction(restriction.id)}
+                      disabled={loading}
+                      className="ml-4 px-3 py-1 text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Employee Assignments */}
+      <div className="bg-white border border-gray-200 rounded-lg">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Employee Assignments</h3>
+        </div>
+        <div className="divide-y divide-gray-200">
+          {employeeAssignments.length === 0 ? (
+            <div className="px-6 py-4 text-center text-gray-500">
+              No restrictions assigned to employees
+            </div>
+          ) : (
+            employeeAssignments.map(assignment => (
+              <div key={assignment.id} className="px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <h4 className="text-sm font-medium text-gray-900">
+                      {getEmployeeName(assignment.employee_id)}
+                    </h4>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {assignment.restriction_type} Restriction: {getRestrictionDetails(assignment)}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Assigned: {new Date(assignment.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => unassignRestriction(assignment.id)}
+                    disabled={loading}
+                    className="ml-4 px-3 py-1 text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

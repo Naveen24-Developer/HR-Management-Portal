@@ -45,8 +45,9 @@ export async function GET(req: NextRequest) {
       .leftJoin(departments, eq(employees.departmentId, departments.id));
 
     // Apply date filter
+    let whereCondition;
     if (view === 'daily') {
-      query = query.where(eq(attendance.date, date));
+      whereCondition = eq(attendance.date, date);
     } else if (view === 'monthly') {
       const startOfMonth = new Date(date);
       startOfMonth.setDate(1);
@@ -54,15 +55,13 @@ export async function GET(req: NextRequest) {
       endOfMonth.setMonth(endOfMonth.getMonth() + 1);
       endOfMonth.setDate(0);
 
-      query = query.where(
-        and(
-          gte(attendance.date, startOfMonth.toISOString().split('T')[0]),
-          lte(attendance.date, endOfMonth.toISOString().split('T')[0])
-        )
+      whereCondition = and(
+        gte(attendance.date, startOfMonth.toISOString().split('T')[0]),
+        lte(attendance.date, endOfMonth.toISOString().split('T')[0])
       );
     }
 
-    const records = await query;
+    const records = whereCondition ? await query.where(whereCondition) : await query;
 
     // Format data for Excel
     const excelData = records.map((record) => ({

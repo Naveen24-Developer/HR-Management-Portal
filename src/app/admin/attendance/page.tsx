@@ -28,7 +28,7 @@ interface AttendanceRecord {
   checkIn: string;
   checkOut: string;
   workHours: number;
-  status: 'present' | 'absent' | 'late' | 'half_day';
+  status: 'present' | 'absent' | 'late' | 'early' | 'half_day';
   lateMinutes?: number;
   earlyCheckout?: boolean;
   overtimeMinutes?: number;
@@ -47,7 +47,6 @@ interface AttendanceStats {
 interface AttendanceSettings {
   workHours: number;
   overtimeRate: number;
-  gracePeriod: number;
   autoCheckout: boolean;
   checkInStart: string;
   checkInEnd: string;
@@ -77,7 +76,6 @@ export default function AttendanceManagement() {
   const [attendanceSettings, setAttendanceSettings] = useState<AttendanceSettings>({
     workHours: 8,
     overtimeRate: 1.5,
-    gracePeriod: 15,
     autoCheckout: true,
     checkInStart: '08:00',
     checkInEnd: '10:00',
@@ -202,6 +200,7 @@ export default function AttendanceManagement() {
   };
 
   const calculateAttendanceStatus = (record: AttendanceRecord) => {
+    // If no check-in, mark as absent
     if (!record.checkIn) {
       return { status: 'absent' as const, lateMinutes: 0, earlyCheckout: false, overtimeMinutes: 0 };
     }
@@ -209,42 +208,77 @@ export default function AttendanceManagement() {
     const checkInTime = new Date(record.checkIn);
     const checkInHours = checkInTime.getHours();
     const checkInMinutes = checkInTime.getMinutes();
-    
-    // Parse check-in start time from settings
-    const [checkInStartHour, checkInStartMinute] = attendanceSettings.checkInStart.split(':').map(Number);
-    const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
     const checkInTotalMinutes = checkInHours * 60 + checkInMinutes;
     
-    // Calculate grace period
-    const gracePeriodMinutes = attendanceSettings.gracePeriod || 15;
-    const lateThreshold = checkInStartTotalMinutes + gracePeriodMinutes;
-    
-    let status: 'present' | 'late' | 'half_day' | 'absent' = 'present';
+    // Parse check-in start and end times from settings
+    const [checkInStartHour, checkInStartMinute] = attendanceSettings.checkInStart.split(':').map(Number);
+    const [checkInEndHour, checkInEndMinute] = attendanceSettings.checkInEnd.split(':').map(Number);
+    const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
+    const checkInEndTotalMinutes = checkInEndHour * 60 + checkInEndMinute;
+
+    let status: 'present' | 'late' | 'early' | 'half_day' | 'absent' = 'present';
     let lateMinutes = 0;
     let earlyCheckout = false;
     let overtimeMinutes = 0;
 
-    // Check for late arrival
-    if (checkInTotalMinutes > lateThreshold) {
+    // Check-in Status: On Time, Early, or Late
+    if (checkInTotalMinutes < checkInStartTotalMinutes) {
+      // EARLY: Check-in before Check-in Start time
+      status = 'early';
+      lateMinutes = checkInStartTotalMinutes - checkInTotalMinutes; // Store early minutes as positive
+    } else if (checkInTotalMinutes > checkInEndTotalMinutes) {
+      // LATE: Check-in after Check-in End time
       status = 'late';
-      lateMinutes = checkInTotalMinutes - lateThreshold;
+      lateMinutes = checkInTotalMinutes - checkInEndTotalMinutes;
     }
-    
-    // Check work hours if checked out
+    // else: Check-in within Check-in Start-End range = present (On Time)
+
+    // Check-out Status and Present/Absent Condition
     if (record.checkOut) {
       const checkOutTime = new Date(record.checkOut);
+      const checkOutHours = checkOutTime.getHours();
+      const checkOutMinutes = checkOutTime.getMinutes();
+      const checkOutTotalMinutes = checkOutHours * 60 + checkOutMinutes;
+
+      // Parse check-out start and end times
+      const [checkOutStartHour, checkOutStartMinute] = attendanceSettings.checkOutStart.split(':').map(Number);
+      const [checkOutEndHour, checkOutEndMinute] = attendanceSettings.checkOutEnd.split(':').map(Number);
+      const checkOutStartTotalMinutes = checkOutStartHour * 60 + checkOutStartMinute;
+      const checkOutEndTotalMinutes = checkOutEndHour * 60 + checkOutEndMinute;
+
+      // Calculate work hours
       const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
       const requiredWorkHours = attendanceSettings.workHours || 8;
-      
-      // Check for early checkout
-      if (workHours < requiredWorkHours - 2) {
+
+      // Check-out Status: On Time, Early, or Over Time
+      if (checkOutTotalMinutes < checkOutStartTotalMinutes) {
+        // EARLY: Check-out before Check-out Start time
+        earlyCheckout = true;
+      } else if (checkOutTotalMinutes > checkOutEndTotalMinutes) {
+        // OVER TIME: Check-out after Check-out End time
+        overtimeMinutes = Math.round((checkOutTotalMinutes - checkOutEndTotalMinutes));
+      }
+
+      // Present Condition: checked in AND checked out
+      // (status already determined by check-in, check-out status just adds details)
+    } else {
+      // No check-out: potentially half_day or absent
+      // Check if within work hours but not checked out yet
+      const requiredWorkHours = attendanceSettings.workHours || 8;
+      const checkOutStartHour = parseInt(attendanceSettings.checkOutStart.split(':')[0]);
+      const checkOutStartMinute = parseInt(attendanceSettings.checkOutStart.split(':')[1]);
+      const checkOutStartTotalMinutes = checkOutStartHour * 60 + checkOutStartMinute;
+
+      const now = new Date();
+      const nowTotalMinutes = now.getHours() * 60 + now.getMinutes();
+
+      // If it's past check-out start time and no check-out, mark as absent
+      if (nowTotalMinutes >= checkOutStartTotalMinutes) {
+        status = 'absent';
+      } else {
+        // Still within work hours but not checked out yet
         status = 'half_day';
         earlyCheckout = true;
-      }
-      
-      // Check for overtime
-      if (workHours > requiredWorkHours) {
-        overtimeMinutes = Math.round((workHours - requiredWorkHours) * 60);
       }
     }
     
@@ -371,12 +405,14 @@ export default function AttendanceManagement() {
     switch (status) {
       case 'present':
         return <CheckCircleIcon className="w-5 h-5 text-green-500" />;
+      case 'early':
+        return <CheckCircleIcon className="w-5 h-5 text-blue-500" />;
       case 'absent':
         return <XCircleIcon className="w-5 h-5 text-red-500" />;
       case 'late':
         return <ExclamationTriangleIcon className="w-5 h-5 text-yellow-500" />;
       case 'half_day':
-        return <ClockIcon className="w-5 h-5 text-blue-500" />;
+        return <ClockIcon className="w-5 h-5 text-orange-500" />;
       default:
         return <ClockIcon className="w-5 h-5 text-gray-500" />;
     }
@@ -386,12 +422,14 @@ export default function AttendanceManagement() {
     switch (status) {
       case 'present':
         return 'bg-green-100 text-green-800';
+      case 'early':
+        return 'bg-blue-100 text-blue-800';
       case 'absent':
         return 'bg-red-100 text-red-800';
       case 'late':
         return 'bg-yellow-100 text-yellow-800';
       case 'half_day':
-        return 'bg-blue-100 text-blue-800';
+        return 'bg-orange-100 text-orange-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -401,7 +439,6 @@ export default function AttendanceManagement() {
     return {
       checkIn: `${attendanceSettings.checkInStart} - ${attendanceSettings.checkInEnd}`,
       checkOut: `${attendanceSettings.checkOutStart} - ${attendanceSettings.checkOutEnd}`,
-      gracePeriod: `${attendanceSettings.gracePeriod} minutes`,
       workHours: `${attendanceSettings.workHours} hours`,
     };
   };
@@ -429,7 +466,7 @@ export default function AttendanceManagement() {
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-500">
             <span>✅ Check-in: {getTimeWindowInfo().checkIn}</span>
             <span>🚪 Check-out: {getTimeWindowInfo().checkOut}</span>
-            <span>⏰ Grace: {getTimeWindowInfo().gracePeriod}</span>
+            {/* Grace period removed */}
             <span>📊 Work Hours: {getTimeWindowInfo().workHours}</span>
           </div>
         </div>
@@ -550,7 +587,8 @@ export default function AttendanceManagement() {
             className="px-4 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
           >
             <option value="">All Status</option>
-            <option value="present">Present</option>
+            <option value="present">On Time</option>
+            <option value="early">Early</option>
             <option value="absent">Absent</option>
             <option value="late">Late</option>
             <option value="half_day">Half Day</option>
@@ -627,9 +665,14 @@ export default function AttendanceManagement() {
                     {record.checkIn ? (
                       <div>
                         <div>{new Date(record.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        {record.lateMinutes && record.lateMinutes > 0 && (
+                        {record.lateMinutes && record.lateMinutes > 0 && record.status === 'late' && (
                           <div className="text-xs text-yellow-600">
-                            +{record.lateMinutes}m
+                            Late: +{record.lateMinutes}m
+                          </div>
+                        )}
+                        {record.lateMinutes && record.lateMinutes > 0 && record.status === 'early' && (
+                          <div className="text-xs text-blue-600">
+                            Early: -{record.lateMinutes}m
                           </div>
                         )}
                       </div>
@@ -643,7 +686,7 @@ export default function AttendanceManagement() {
                         <div>{new Date(record.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                         {record.earlyCheckout && (
                           <div className="text-xs text-orange-600">
-                            Early
+                            Early checkout
                           </div>
                         )}
                       </div>

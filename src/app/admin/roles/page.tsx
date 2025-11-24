@@ -19,6 +19,8 @@ interface Role {
   name: string;
   description: string;
   permissions: Record<string, Record<string, boolean>>;
+  sidebarPermissions: string[]; // Array of allowed sidebar items
+  pagePermissions: string[]; // Array of allowed pages/routes
   isDefault: boolean;
   isSystem: boolean;
   usersCount: number;

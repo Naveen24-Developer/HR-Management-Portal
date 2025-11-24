@@ -7,7 +7,7 @@ import { verifyToken } from '@/lib/auth';
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const token = req.headers.get('authorization')?.replace('Bearer ', '');
@@ -20,7 +20,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
-    const { id } = params;
+    const { id } = await params;
 
     // Delete the record
     await db.delete(attendance).where(eq(attendance.id, id));

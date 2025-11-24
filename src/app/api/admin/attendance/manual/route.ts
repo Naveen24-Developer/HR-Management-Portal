@@ -41,37 +41,50 @@ export async function POST(req: NextRequest) {
     const workHours = workMilliseconds / (1000 * 60 * 60);
     const requiredWorkHours = parseFloat(settings.workHours.toString());
 
-    // Calculate status
+    // Calculate status based on new specifications
     const checkInHours = checkInTimestamp.getHours();
     const checkInMinutes = checkInTimestamp.getMinutes();
     const checkInTotalMinutes = checkInHours * 60 + checkInMinutes;
 
     const [checkInStartHour, checkInStartMinute] = settings.checkInStart.split(':').map(Number);
+    const [checkInEndHour, checkInEndMinute] = settings.checkInEnd.split(':').map(Number);
     const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
+    const checkInEndTotalMinutes = checkInEndHour * 60 + checkInEndMinute;
 
-    const gracePeriod = settings.gracePeriod || 15;
-    const lateThreshold = checkInStartTotalMinutes + gracePeriod;
-
-    let status = 'present';
+    // Determine check-in status
+    let status = 'present'; // Default: On Time
     let lateMinutes = 0;
+
+    if (checkInTotalMinutes < checkInStartTotalMinutes) {
+      // Early check-in
+      status = 'early';
+      lateMinutes = checkInStartTotalMinutes - checkInTotalMinutes; // Store minutes early as positive in lateMinutes
+    } else if (checkInTotalMinutes > checkInEndTotalMinutes) {
+      // Late check-in
+      status = 'late';
+      lateMinutes = checkInTotalMinutes - checkInEndTotalMinutes;
+    }
+
+    // Parse check-out settings times for check-out status
+    const [checkOutStartHour, checkOutStartMinute] = settings.checkOutStart.split(':').map(Number);
+    const [checkOutEndHour, checkOutEndMinute] = settings.checkOutEnd.split(':').map(Number);
+    const checkOutStartTotalMinutes = checkOutStartHour * 60 + checkOutStartMinute;
+    const checkOutEndTotalMinutes = checkOutEndHour * 60 + checkOutEndMinute;
+
+    const checkOutHours = checkOutTimestamp.getHours();
+    const checkOutMinutes = checkOutTimestamp.getMinutes();
+    const checkOutTotalMinutes = checkOutHours * 60 + checkOutMinutes;
+
     let earlyCheckout = false;
     let overtimeMinutes = 0;
 
-    // Check if late
-    if (checkInTotalMinutes > lateThreshold) {
-      status = 'late';
-      lateMinutes = checkInTotalMinutes - lateThreshold;
-    }
-
-    // Check for half day
-    if (workHours < requiredWorkHours - 2) {
-      status = 'half_day';
+    // Determine check-out status
+    if (checkOutTotalMinutes < checkOutStartTotalMinutes) {
+      // Early check-out (before Check-out Start time)
       earlyCheckout = true;
-    }
-
-    // Calculate overtime
-    if (workHours > requiredWorkHours) {
-      overtimeMinutes = Math.round((workHours - requiredWorkHours) * 60);
+    } else if (checkOutTotalMinutes > checkOutEndTotalMinutes) {
+      // Over time (after Check-out End time)
+      overtimeMinutes = checkOutTotalMinutes - checkOutEndTotalMinutes;
     }
 
     // Check for existing record

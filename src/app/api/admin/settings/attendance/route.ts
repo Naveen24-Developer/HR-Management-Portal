@@ -40,7 +40,6 @@ export async function GET(req: NextRequest) {
         .values({
           workHours: '8.0',
           overtimeRate: '1.5',
-          gracePeriod: 15,
           autoCheckout: true,
           checkInStart: '08:00',
           checkInEnd: '10:00',
@@ -81,7 +80,6 @@ export async function PUT(req: NextRequest) {
     const {
       workHours,
       overtimeRate,
-      gracePeriod,
       autoCheckout,
       checkInStart,
       checkInEnd,
@@ -121,7 +119,6 @@ export async function PUT(req: NextRequest) {
         .set({
           workHours: workHours.toString(),
           overtimeRate: overtimeRate.toString(),
-          gracePeriod,
           autoCheckout,
           checkInStart,
           checkInEnd,
@@ -140,7 +137,6 @@ export async function PUT(req: NextRequest) {
         .values({
           workHours: workHours.toString(),
           overtimeRate: overtimeRate.toString(),
-          gracePeriod,
           autoCheckout,
           checkInStart,
           checkInEnd,

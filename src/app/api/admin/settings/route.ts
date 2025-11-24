@@ -52,7 +52,6 @@ export async function GET(request: NextRequest) {
       attendance: {
         workHours: 8,
         overtimeRate: 1.5,
-        gracePeriod: 15,
         autoCheckout: true,
         checkInStart: '08:00',
         checkInEnd: '10:00',
@@ -180,7 +179,7 @@ export async function PUT(request: NextRequest) {
           
           // Validate required fields for attendance
           const requiredFields = [
-            'workHours', 'overtimeRate', 'gracePeriod', 'autoCheckout',
+            'workHours', 'overtimeRate', 'autoCheckout',
             'checkInStart', 'checkInEnd', 'checkOutStart', 'checkOutEnd'
           ];
           

@@ -1,3 +1,4 @@
+//src/lib/database/schema.ts
 import { pgTable, uuid, varchar, text, timestamp, boolean, integer, date, time, decimal, jsonb } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -216,6 +217,38 @@ export const holidays = pgTable('holidays', {
     isRecurring: boolean('is_recurring').default(false),
     createdAt: timestamp('created_at').defaultNow(),
 });
+
+// IP Restrictions - Allowed IP ranges for check-in
+export const ipRestrictions = pgTable('ip_restrictions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: varchar('title', { length: 100 }).notNull(),
+  allowedIps: jsonb('allowed_ips').notNull().default('[]'), // Array of IPs/CIDR ranges
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Geo Restrictions - Geographic zones for check-in
+export const geoRestrictions = pgTable('geo_restrictions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  title: varchar('title', { length: 100 }).notNull(),
+  latitude: decimal('latitude', { precision: 10, scale: 7 }).notNull(), // -90 to 90
+  longitude: decimal('longitude', { precision: 10, scale: 7 }).notNull(), // -180 to 180
+  radiusMeters: integer('radius_meters').notNull(), // Radius in meters
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Employee Restrictions - Links employees to IP/Geo restrictions
+export const employeeRestrictions = pgTable('employee_restrictions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  employeeId: uuid('employee_id').references(() => employees.id).notNull(),
+  restrictionType: varchar('restriction_type', { length: 10, enum: ['IP', 'GEO'] }).notNull(),
+  restrictionId: uuid('restriction_id').notNull(), // References ip_restrictions or geo_restrictions
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+
 
 // Relations
 export const usersRelations = relations(users, ({ one, many }) => ({

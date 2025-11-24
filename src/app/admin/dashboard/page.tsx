@@ -16,6 +16,8 @@ import {
   StopIcon,
   BuildingOfficeIcon,
 } from '@heroicons/react/24/outline';
+import CheckInDialog from '@/components/attendance/CheckInDialog';
+import { formatErrorAlert } from '@/lib/utils/attendance-errors';
 
 interface DashboardStats {
   totalEmployees: number;
@@ -58,7 +60,6 @@ interface DashboardStats {
   };
   attendanceSettings: {
     workHours: number;
-    gracePeriod: number;
     checkInStart: string;
     checkInEnd: string;
     checkOutStart: string;
@@ -119,7 +120,6 @@ export default function AdminDashboard() {
     },
     attendanceSettings: {
       workHours: 8,
-      gracePeriod: 15,
       checkInStart: '08:00',
       checkInEnd: '10:00',
       checkOutStart: '17:00',
@@ -134,6 +134,8 @@ export default function AdminDashboard() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [checkInDialogOpen, setCheckInDialogOpen] = useState(false);
+  const [requiresGeo, setRequiresGeo] = useState(false);
 
   // Update current time every minute
   useEffect(() => {
@@ -164,7 +166,26 @@ export default function AdminDashboard() {
     fetchCurrentAttendance();
     fetchAttendanceSettings();
     fetchAttendanceRecords();
+    checkEmployeeRestrictions();
   }, [timeRange]);
+
+  const checkEmployeeRestrictions = async () => {
+    try {
+      const token = localStorage.getItem('auth-token');
+      const response = await fetch('/api/admin/attendance/check-restrictions', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setRequiresGeo(data.requiresLocation || false);
+      }
+    } catch (error) {
+      console.error('Failed to check restrictions:', error);
+    }
+  };
 
   const fetchCurrentUser = async () => {
     try {
@@ -273,23 +294,24 @@ export default function AdminDashboard() {
     const checkInMinutes = checkInTime.getMinutes();
 
     const [checkInStartHour, checkInStartMinute] = stats.attendanceSettings.checkInStart.split(':').map(Number);
+    const [checkInEndHour, checkInEndMinute] = stats.attendanceSettings.checkInEnd.split(':').map(Number);
     const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
+    const checkInEndTotalMinutes = checkInEndHour * 60 + checkInEndMinute;
     const checkInTotalMinutes = checkInHours * 60 + checkInMinutes;
-    const gracePeriodMinutes = stats.attendanceSettings.gracePeriod;
 
-    // Early check-in
+    // EARLY: Check-in before Check-in Start time
     if (checkInTotalMinutes < checkInStartTotalMinutes) {
       const earlyMinutes = checkInStartTotalMinutes - checkInTotalMinutes;
-      return { status: 'early' as const, lateMinutes: 0, earlyMinutes };
+      return { status: 'early' as const, lateMinutes: earlyMinutes, earlyMinutes };
     }
 
-    // Late check-in (after grace)
-    if (checkInTotalMinutes > (checkInStartTotalMinutes + gracePeriodMinutes)) {
-      const lateMinutes = checkInTotalMinutes - (checkInStartTotalMinutes + gracePeriodMinutes);
+    // LATE: Check-in after Check-in End time
+    if (checkInTotalMinutes > checkInEndTotalMinutes) {
+      const lateMinutes = checkInTotalMinutes - checkInEndTotalMinutes;
       return { status: 'late' as const, lateMinutes, earlyMinutes: 0 };
     }
 
-    // On-time
+    // ON TIME: Check-in within Check-in Start-End range
     return { status: 'present' as const, lateMinutes: 0, earlyMinutes: 0 };
   };
 
@@ -297,79 +319,83 @@ export default function AdminDashboard() {
     const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
     const requiredWorkHours = stats.attendanceSettings.workHours;
 
+    const [checkOutStartHour, checkOutStartMinute] = stats.attendanceSettings.checkOutStart.split(':').map(Number);
     const [checkOutEndHour, checkOutEndMinute] = stats.attendanceSettings.checkOutEnd.split(':').map(Number);
+    const checkOutStartTotalMinutes = checkOutStartHour * 60 + checkOutStartMinute;
     const checkOutEndTotalMinutes = checkOutEndHour * 60 + checkOutEndMinute;
     const checkOutTotalMinutes = checkOutTime.getHours() * 60 + checkOutTime.getMinutes();
 
-    // Early checkout relative to checkOutEnd
-    if (checkOutTotalMinutes < checkOutEndTotalMinutes) {
-      const earlyMinutes = checkOutEndTotalMinutes - checkOutTotalMinutes;
-      // If very short day (less than required minus 2 hours) mark half day
-      const isHalfDay = workHours < (requiredWorkHours - 2);
-      return { status: isHalfDay ? 'half_day' as const : 'present' as const, earlyCheckout: true, earlyMinutes, overtimeMinutes: 0 };
+    // EARLY CHECK-OUT: before Check-out Start time
+    if (checkOutTotalMinutes < checkOutStartTotalMinutes) {
+      const earlyMinutes = checkOutStartTotalMinutes - checkOutTotalMinutes;
+      return { status: 'present' as const, earlyCheckout: true, earlyMinutes, overtimeMinutes: 0 };
     }
 
-    // Calculate overtime relative to requiredWorkHours
-    if (workHours > requiredWorkHours) {
-      const overtimeMinutes = Math.round((workHours - requiredWorkHours) * 60);
+    // OVER TIME: after Check-out End time
+    if (checkOutTotalMinutes > checkOutEndTotalMinutes) {
+      const overtimeMinutes = checkOutTotalMinutes - checkOutEndTotalMinutes;
       return { status: 'present' as const, earlyCheckout: false, earlyMinutes: 0, overtimeMinutes };
     }
 
+    // ON TIME: Check-out within Check-out Start-End range
     return { status: 'present' as const, earlyCheckout: false, earlyMinutes: 0, overtimeMinutes: 0 };
   };
 
   const handleCheckIn = async () => {
+    setCheckInDialogOpen(true);
+  };
+
+  const handleCheckInSubmit = async (data: {
+    timestamp: string;
+    latitude?: number;
+    longitude?: number;
+  }) => {
     setCheckInLoading(true);
     try {
       const token = localStorage.getItem('auth-token');
-      const checkInTime = new Date();
-      const { status, lateMinutes, earlyMinutes } = calculateCheckInStatus(checkInTime) as any;
-
       const response = await fetch('/api/admin/attendance/checkin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          timestamp: checkInTime.toISOString(),
-          status,
-          lateMinutes,
-          earlyMinutes,
-        }),
+        body: JSON.stringify(data),
       });
 
       if (response.ok) {
         await fetchCurrentAttendance();
         await fetchDashboardStats();
-        
-        // Add to recent activities
-        const activityAction = earlyMinutes > 0
-          ? `Checked in (Early ${earlyMinutes}m)`
-          : lateMinutes > 0
-          ? `Checked in (Late ${lateMinutes}m)`
-          : 'Checked in (On time)';
 
+        // Get the response data for the status message
+        const result = await response.json();
+        const message = result.message || 'Checked in successfully';
+
+        // Add to recent activities
         setStats(prev => ({
           ...prev,
           recentActivities: [
             {
               id: Date.now().toString(),
-              action: activityAction,
+              action: message,
               user: `${currentUser?.firstName} ${currentUser?.lastName}`,
               time: 'Just now',
-              type: lateMinutes > 0 ? 'warning' : 'success',
+              type: result.attendance?.status === 'late' ? 'warning' : 'success',
             },
             ...prev.recentActivities.slice(0, 4),
           ],
         }));
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to check in');
+        const errorAlert = formatErrorAlert(error);
+        throw {
+          code: error.code,
+          message: error.error || error.message,
+          response: { data: error },
+        };
       }
     } catch (error) {
       console.error('Failed to check in:', error);
-      alert('Failed to check in');
+      throw error;
     } finally {
       setCheckInLoading(false);
     }
@@ -1101,6 +1127,14 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Check-In Dialog */}
+      <CheckInDialog
+        isOpen={checkInDialogOpen}
+        onClose={() => setCheckInDialogOpen(false)}
+        onSubmit={handleCheckInSubmit}
+        requiresGeo={requiresGeo}
+      />
     </div>
   );
 }

@@ -126,56 +126,64 @@ export async function GET(request: NextRequest) {
       const lastName = record.employeeLastName;
       const employeeName = firstName ? `${firstName}${lastName ? ` ${lastName}` : ''}` : 'Unknown Employee';
 
-      // default status message
+      // Default status message
       let statusMsg = 'Not Checked In';
 
-      // compute check-in based statuses if checkIn exists
-      if (record.checkIn) {
-        if (settings) {
-          const checkInDate = new Date(record.checkIn);
-          const [startH, startM] = settings.checkInStart.toString().split(':').map(Number);
-          const checkInStartTotal = startH * 60 + startM;
-          const checkInTotal = checkInDate.getHours() * 60 + checkInDate.getMinutes();
-          const grace = settings.gracePeriod || 15;
-          const lateThreshold = checkInStartTotal + grace;
+      // Compute check-in and check-out statuses
+      if (record.checkIn && settings) {
+        const checkInDate = new Date(record.checkIn);
+        const [checkInStartH, checkInStartM] = settings.checkInStart.toString().split(':').map(Number);
+        const [checkInEndH, checkInEndM] = settings.checkInEnd.toString().split(':').map(Number);
+        const checkInStartTotal = checkInStartH * 60 + checkInStartM;
+        const checkInEndTotal = checkInEndH * 60 + checkInEndM;
+        const checkInTotal = checkInDate.getHours() * 60 + checkInDate.getMinutes();
 
-          if (checkInTotal < checkInStartTotal) {
-            const earlyMinutes = checkInStartTotal - checkInTotal;
-            statusMsg = `Early by ${earlyMinutes} min`;
-          } else if (checkInTotal > lateThreshold) {
-            const lateMinutes = checkInTotal - lateThreshold;
-            statusMsg = `Late by ${lateMinutes} min`;
-          } else {
-            statusMsg = 'On Time';
-          }
+        // Determine check-in status
+        if (checkInTotal < checkInStartTotal) {
+          // EARLY: Check-in before Check-in Start
+          const earlyMinutes = checkInStartTotal - checkInTotal;
+          statusMsg = `Early by ${earlyMinutes} min`;
+        } else if (checkInTotal > checkInEndTotal) {
+          // LATE: Check-in after Check-in End
+          const lateMinutes = checkInTotal - checkInEndTotal;
+          statusMsg = `Late by ${lateMinutes} min`;
         } else {
-          // fallback to stored status
-          statusMsg = record.status === 'present' ? 'On Time' : record.status;
+          // ON TIME: Check-in within Check-in Start-End range
+          statusMsg = 'On Time';
         }
       }
 
-      // compute check-out related status details (may override or append)
+      // Determine check-out status and Present/Absent marking
       if (record.checkOut && settings) {
         const checkOutDate = new Date(record.checkOut);
-        const [endH, endM] = settings.checkOutEnd.toString().split(':').map(Number);
-        const checkOutEndTotal = endH * 60 + endM;
+        const [checkOutStartH, checkOutStartM] = settings.checkOutStart.toString().split(':').map(Number);
+        const [checkOutEndH, checkOutEndM] = settings.checkOutEnd.toString().split(':').map(Number);
+        const checkOutStartTotal = checkOutStartH * 60 + checkOutStartM;
+        const checkOutEndTotal = checkOutEndH * 60 + checkOutEndM;
         const checkOutTotal = checkOutDate.getHours() * 60 + checkOutDate.getMinutes();
 
-        // calculate work hours and compare with required
-        const requiredWorkHours = parseFloat(settings.workHours.toString() || '8');
-        const workHours = parseFloat(record.workHours || '0');
-        const overtime = Math.max(0, Math.round((workHours - requiredWorkHours) * 60));
-
-        if (checkOutTotal < checkOutEndTotal) {
-          const earlyMinutes = checkOutEndTotal - checkOutTotal;
-          // if already Late on check-in, append early checkout info
-          if (statusMsg && statusMsg.startsWith('Late')) {
-            statusMsg = `${statusMsg}; Early checkout ${earlyMinutes} min`;
-          } else {
-            statusMsg = `Early by ${earlyMinutes} min`;
-          }
-        } else if (overtime > 0) {
-          statusMsg = `Overtime ${overtime} min`;
+        // Determine check-out status
+        if (checkOutTotal < checkOutStartTotal) {
+          // EARLY CHECK-OUT: before Check-out Start
+          const earlyMinutes = checkOutStartTotal - checkOutTotal;
+          statusMsg = `${statusMsg}; Early checkout ${earlyMinutes} min`;
+        } else if (checkOutTotal > checkOutEndTotal) {
+          // OVER TIME: after Check-out End
+          const overtimeMinutes = checkOutTotal - checkOutEndTotal;
+          statusMsg = `Overtime ${overtimeMinutes} min`;
+        }
+        // else: ON TIME check-out (within Check-out Start-End), no change to statusMsg
+      } else if (record.checkIn && settings) {
+        // Check if not checked out by Check-out Start = ABSENT
+        const checkOutStartH = parseInt(settings.checkOutStart.toString().split(':')[0]);
+        const checkOutStartM = parseInt(settings.checkOutStart.toString().split(':')[1]);
+        const checkOutStartTotal = checkOutStartH * 60 + checkOutStartM;
+        const now = new Date();
+        const currentTotal = now.getHours() * 60 + now.getMinutes();
+        
+        // Mark ABSENT if current time is past check-out start and no check-out recorded
+        if (currentTotal >= checkOutStartTotal && !record.checkOut) {
+          statusMsg = 'Absent';
         }
       }
 

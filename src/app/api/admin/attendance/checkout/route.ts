@@ -100,24 +100,21 @@ export async function POST(req: NextRequest) {
     const workHours = workMilliseconds / (1000 * 60 * 60);
     const requiredWorkHours = parseFloat(settings.workHours.toString());
 
-    // Determine status based on check-out time and work hours
-    let finalStatus = todayRecord.status; // Keep existing status (present/late)
+    // Determine status based on check-out time and work hours according to specifications
+    let finalStatus = todayRecord.status; // Keep existing check-in status (present/early/late)
     let earlyCheckout = false;
     let overtimeMinutes = 0;
 
-    // If checked out before end time (early checkout)
-    if (checkOutTimeTotalMinutes < checkOutEndTotalMinutes) {
+    // Check-out Status Determination
+    // EARLY: Check-out before Check-out Start time
+    if (checkOutTimeTotalMinutes < checkOutStartTotalMinutes) {
       earlyCheckout = true;
-      finalStatus = 'half_day';
     }
-
-    // Calculate overtime (worked beyond required hours)
-    if (workHours > requiredWorkHours) {
-      overtimeMinutes = Math.round((workHours - requiredWorkHours) * 60);
-      if (!earlyCheckout) {
-        finalStatus = 'present'; // Keep present status if no early checkout
-      }
+    // OVER TIME: Check-out after Check-out End time
+    else if (checkOutTimeTotalMinutes > checkOutEndTotalMinutes) {
+      overtimeMinutes = Math.round(checkOutTimeTotalMinutes - checkOutEndTotalMinutes);
     }
+    // ON TIME: Check-out within Check-out Start-End range (no special status)
 
     // Update attendance record
     const [updated] = await db
@@ -134,11 +131,14 @@ export async function POST(req: NextRequest) {
       .returning();
 
     const workHoursFormatted = workHours.toFixed(1);
-    const statusDetail = earlyCheckout
-      ? `Early checkout (${Math.round((checkOutEndTotalMinutes - checkOutTimeTotalMinutes))} minutes early)`
-      : overtimeMinutes > 0
-      ? `Overtime ${overtimeMinutes} minutes`
-      : 'On time';
+    let statusDetail = 'On Time';
+    
+    if (earlyCheckout) {
+      const earlyMinutes = checkOutStartTotalMinutes - checkOutTimeTotalMinutes;
+      statusDetail = `Early checkout by ${earlyMinutes} minutes`;
+    } else if (overtimeMinutes > 0) {
+      statusDetail = `Overtime by ${overtimeMinutes} minutes`;
+    }
 
     return NextResponse.json({
       success: true,
