@@ -19,7 +19,7 @@ export const ERROR_ALERT_MAP: Record<string, ErrorAlert> = {
   // IP Restriction Errors
   IP_NOT_ALLOWED: {
     title: 'Access Denied',
-    message: 'You are not in the allowed IP range.',
+    message: 'Your IP is not in the allowed range.',
     type: 'error',
   },
   IP_UNKNOWN: {

@@ -169,23 +169,27 @@ export default function AdminDashboard() {
     checkEmployeeRestrictions();
   }, [timeRange]);
 
-  const checkEmployeeRestrictions = async () => {
-    try {
-      const token = localStorage.getItem('auth-token');
-      const response = await fetch('/api/admin/attendance/check-restrictions', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+// In your dashboard component, update the checkEmployeeRestrictions function:
+const checkEmployeeRestrictions = async () => {
+  try {
+    const token = localStorage.getItem('auth-token');
+    const response = await fetch('/api/admin/attendance/check-restrictions', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-      if (response.ok) {
-        const data = await response.json();
-        setRequiresGeo(data.requiresLocation || false);
-      }
-    } catch (error) {
-      console.error('Failed to check restrictions:', error);
+    if (response.ok) {
+      const data = await response.json();
+      setRequiresGeo(data.requiresLocation || false);
+      console.log('Employee restrictions:', data);
+    } else {
+      console.error('Failed to check restrictions:', response.status);
     }
-  };
+  } catch (error) {
+    console.error('Failed to check restrictions:', error);
+  }
+};
 
   const fetchCurrentUser = async () => {
     try {

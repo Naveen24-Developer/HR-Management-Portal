@@ -13,14 +13,26 @@ export interface GeoCoord {
  * Validate latitude (-90 to 90)
  */
 export function isValidLatitude(lat: number): boolean {
-  return lat >= -90 && lat <= 90;
+  return typeof lat === 'number' && isFinite(lat) && lat >= -90 && lat <= 90;
 }
 
 /**
  * Validate longitude (-180 to 180)
  */
 export function isValidLongitude(lng: number): boolean {
-  return lng >= -180 && lng <= 180;
+  return typeof lng === 'number' && isFinite(lng) && lng >= -180 && lng <= 180;
+}
+
+/**
+ * Validate coordinate object
+ */
+export function isValidCoordinate(coord: any): coord is GeoCoord {
+  return (
+    coord &&
+    typeof coord === 'object' &&
+    isValidLatitude(coord.latitude) &&
+    isValidLongitude(coord.longitude)
+  );
 }
 
 /**
@@ -31,7 +43,12 @@ export function haversineDistance(
   coord1: GeoCoord,
   coord2: GeoCoord
 ): number {
-  const toRad = (deg: number) => deg * Math.PI / 180;
+  // Validate inputs
+  if (!isValidCoordinate(coord1) || !isValidCoordinate(coord2)) {
+    throw new Error('Invalid coordinates provided to haversineDistance');
+  }
+
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
   const R = 6371000; // Earth's radius in meters
   
   const lat1 = coord1.latitude;
@@ -42,8 +59,10 @@ export function haversineDistance(
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
   
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   
@@ -62,19 +81,37 @@ export function isWithinGeoZone(
   zoneCoord: GeoCoord,
   radiusMeters: number
 ): boolean {
-  // Validate inputs
-  if (!isValidLatitude(clientCoord.latitude) || !isValidLongitude(clientCoord.longitude)) {
+  try {
+    // Validate inputs
+    if (!isValidCoordinate(clientCoord) || !isValidCoordinate(zoneCoord)) {
+      return false;
+    }
+    
+    if (typeof radiusMeters !== 'number' || !isFinite(radiusMeters) || radiusMeters <= 0) {
+      return false;
+    }
+    
+    const distance = haversineDistance(clientCoord, zoneCoord);
+    return distance <= radiusMeters;
+  } catch (error) {
+    console.error('Error in isWithinGeoZone:', error);
     return false;
   }
-  
-  if (!isValidLatitude(zoneCoord.latitude) || !isValidLongitude(zoneCoord.longitude)) {
-    return false;
+}
+
+/**
+ * Parse coordinate strings to numbers with validation
+ */
+export function parseCoordinate(latitude: any, longitude: any): GeoCoord | null {
+  try {
+    const lat = typeof latitude === 'string' ? parseFloat(latitude) : Number(latitude);
+    const lng = typeof longitude === 'string' ? parseFloat(longitude) : Number(longitude);
+    
+    if (isValidLatitude(lat) && isValidLongitude(lng)) {
+      return { latitude: lat, longitude: lng };
+    }
+    return null;
+  } catch (error) {
+    return null;
   }
-  
-  if (radiusMeters <= 0) {
-    return false;
-  }
-  
-  const distance = haversineDistance(clientCoord, zoneCoord);
-  return distance <= radiusMeters;
 }

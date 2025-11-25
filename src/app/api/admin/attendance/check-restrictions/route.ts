@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let decoded: any = verifyToken(token);
+    const decoded: any = verifyToken(token);
     if (!decoded) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
@@ -32,26 +32,21 @@ export async function GET(req: NextRequest) {
 
     // Check if employee has any restrictions
     const assigned = await db
-      .select({ restriction_type: employeeRestrictions.restrictionType, restriction_id: employeeRestrictions.restrictionId })
+      .select({ 
+        restrictionType: employeeRestrictions.restrictionType, 
+        restrictionId: employeeRestrictions.restrictionId 
+      })
       .from(employeeRestrictions)
       .where(eq(employeeRestrictions.employeeId, employee.id));
 
-    let hasGeoRestriction = false;
-    let hasIPRestriction = false;
-
-    if (assigned && assigned.length > 0) {
-      for (const r of assigned) {
-        const t = (r as any).restriction_type;
-        if (t === 'GEO') hasGeoRestriction = true;
-        if (t === 'IP') hasIPRestriction = true;
-        if (hasGeoRestriction && hasIPRestriction) break;
-      }
-    }
+    const hasGeoRestriction = assigned.some(r => r.restrictionType === 'GEO');
+    const hasIPRestriction = assigned.some(r => r.restrictionType === 'IP');
 
     return NextResponse.json({
       hasGeoRestriction,
       hasIPRestriction,
       requiresLocation: hasGeoRestriction,
+      employeeId: employee.id,
     });
   } catch (error) {
     console.error('Error checking restrictions:', error);

@@ -1,35 +1,48 @@
 // app/api/admin/attendance/checkin/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
-import { attendance, employees, attendanceSettings, employeeRestrictions, ipRestrictions, geoRestrictions } from '@/lib/database/schema';
-import { eq, and, sql } from 'drizzle-orm';
+import { 
+  attendance, 
+  employees, 
+  attendanceSettings, 
+  employeeRestrictions, 
+  ipRestrictions, 
+  geoRestrictions 
+} from '@/lib/database/schema';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth/utils';
-import { matchesAllowedIP, extractClientIP } from '@/lib/restrictions/ip-validator';
-import { isWithinGeoZone, haversineDistance } from '@/lib/restrictions/geo-validator';
-
-
+import { matchesAllowedIP, extractClientIP, debugHeaders } from '@/lib/restrictions/ip-validator';
+import { isWithinGeoZone, parseCoordinate } from '@/lib/restrictions/geo-validator';
 
 export async function POST(req: NextRequest) {
+  debugHeaders(req);
+
   try {
     const token = req.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let decoded: any = verifyToken(token);
+    const decoded: any = verifyToken(token);
     if (!decoded) {
       return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
-    const { timestamp, latitude, longitude } = await req.json();
+    const body = await req.json();
+    const { timestamp, latitude, longitude } = body;
+    
     if (!timestamp) {
       return NextResponse.json({ error: 'Timestamp is required' }, { status: 400 });
     }
 
     const checkInTime = new Date(timestamp);
+    if (isNaN(checkInTime.getTime())) {
+      return NextResponse.json({ error: 'Invalid timestamp' }, { status: 400 });
+    }
+
     const today = checkInTime.toISOString().split('T')[0];
 
-    // Get employee record (support both userId and id)
+    // Get employee record
     const userId = decoded.userId || decoded.id;
     const [employee] = await db
       .select()
@@ -42,116 +55,193 @@ export async function POST(req: NextRequest) {
     }
 
     // ===== IP/GEO RESTRICTION VALIDATION =====
-    // Fetch all restrictions assigned to this employee
-    const assigned = await db
-      .select({ id: employeeRestrictions.id, restriction_type: employeeRestrictions.restrictionType, restriction_id: employeeRestrictions.restrictionId })
+    const assignedRestrictions = await db
+      .select({
+        id: employeeRestrictions.id,
+        restrictionType: employeeRestrictions.restrictionType,
+        restrictionId: employeeRestrictions.restrictionId,
+      })
       .from(employeeRestrictions)
       .where(eq(employeeRestrictions.employeeId, employee.id));
 
-    // No restrictions assigned => allow check-in
-    if (!assigned || assigned.length === 0) {
-      // proceed with attendance creation
+    let restrictionPassed = true;
+    let restrictionFailureCode: string | null = null;
+    let checkInIp: string | null = null;
+    let checkInLatitude: string | null = null;
+    let checkInLongitude: string | null = null;
+
+    console.log('Employee restrictions:', assignedRestrictions);
+
+    // If employee has restrictions, validate them
+    if (assignedRestrictions.length > 0) {
+      const ipRestrictionAssignments = assignedRestrictions.filter(r => r.restrictionType === 'IP');
+      const geoRestrictionAssignments = assignedRestrictions.filter(r => r.restrictionType === 'GEO');
+
+      console.log('IP restrictions assigned:', ipRestrictionAssignments);
+      console.log('GEO restrictions assigned:', geoRestrictionAssignments);
+
+// Validate IP Restrictions
+if (ipRestrictionAssignments.length > 0) {
+  checkInIp = extractClientIP(req);
+  console.log('Extracted client IP:', checkInIp);
+  
+  if (!checkInIp) {
+    restrictionPassed = false;
+    restrictionFailureCode = 'IP_UNKNOWN';
+    console.log('IP restriction failed: Could not extract client IP');
+  } else {
+    const ipRestrictionIds = ipRestrictionAssignments.map(r => r.restrictionId);
+    console.log('IP restriction IDs:', ipRestrictionIds);
+    
+    // Use inArray instead of sql`ANY`
+    const allowedIPRecords = await db
+      .select({ allowedIps: ipRestrictions.allowedIps })
+      .from(ipRestrictions)
+      .where(inArray(ipRestrictions.id, ipRestrictionIds));
+
+    console.log('Allowed IP records from DB:', allowedIPRecords);
+
+    // Flatten all allowed IPs from all assigned IP restrictions
+    const allAllowedIPs: string[] = [];
+    allowedIPRecords.forEach(record => {
+      if (Array.isArray(record.allowedIps)) {
+        allAllowedIPs.push(...record.allowedIps);
+      }
+    });
+
+    console.log('All allowed IPs:', allAllowedIPs);
+    console.log('Client IP to check:', checkInIp);
+    console.log('NODE_ENV:', process.env.NODE_ENV);
+
+    // Check if current IP matches ANY of the allowed IPs
+    const ipMatch = matchesAllowedIP(checkInIp, allAllowedIPs);
+    console.log('IP match result:', ipMatch);
+
+    if (!ipMatch) {
+      // In development mode, show a warning but allow check-in
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Development mode: IP restriction would fail, but allowing check-in for testing');
+        // Continue with check-in but log the restriction issue
+        restrictionPassed = true;
+      } else {
+        // In production, enforce the restriction
+        restrictionPassed = false;
+        restrictionFailureCode = 'IP_NOT_ALLOWED';
+        console.log('IP restriction failed: IP not in allowed list');
+      }
     } else {
-      // Split assigned into IP and GEO arrays
-      const ipAssigned = assigned.filter((r: any) => r.restriction_type === 'IP').map((r: any) => r.restriction_id);
-      const geoAssigned = assigned.filter((r: any) => r.restriction_type === 'GEO').map((r: any) => r.restriction_id);
-
-      // Evaluate IP check if any IP restrictions assigned
-      let ipOk = true;
-      let clientIP: string | null = null;
-      let ipDebugRows: any[] = [];
-      if (ipAssigned.length > 0) {
-        clientIP = extractClientIP(req);
-        if (!clientIP) {
-          ipOk = false;
-        } else {
-          // fetch allowed IP lists
-          const ipRows = await db
-            .select({ id: ipRestrictions.id, allowedIps: ipRestrictions.allowedIps })
-            .from(ipRestrictions)
-            .where(sql`ip_restrictions.id = ANY(${ipAssigned})`);
-          ipDebugRows = ipRows as any[];
-          // if any assigned restriction allows the client IP, ipOk = true
-          ipOk = ipRows.some((r: any) => matchesAllowedIP(clientIP as string, r.allowedIps || []));
-        }
-      }
-
-      // Evaluate GEO check if any GEO restrictions assigned
-      let geoOk = true;
-      let matchedZoneId: number | null = null;
-      let matchedDistanceMeters: number | null = null;
-      let geoInvalidCoords = false;
-
-      if (geoAssigned.length > 0) {
-        // Parse and validate numeric latitude/longitude
-        const latNum = latitude === undefined ? undefined : Number(latitude);
-        const lonNum = longitude === undefined ? undefined : Number(longitude);
-
-        const coordsMissing = latNum === undefined || lonNum === undefined;
-        const coordsInvalid = !coordsMissing && (!isFinite(latNum as number) || !isFinite(lonNum as number) || (latNum as number) < -90 || (latNum as number) > 90 || (lonNum as number) < -180 || (lonNum as number) > 180);
-
-        if (coordsMissing || coordsInvalid) {
-          geoOk = false;
-          geoInvalidCoords = true;
-        } else {
-          const geoRows = await db
-            .select({ id: geoRestrictions.id, latitude: geoRestrictions.latitude, longitude: geoRestrictions.longitude, radiusMeters: geoRestrictions.radiusMeters })
-            .from(geoRestrictions)
-            .where(sql`geo_restrictions.id = ANY(${geoAssigned})`);
-          const clientCoord = { latitude: latNum as number, longitude: lonNum as number };
-
-          // geoOk if any geo restriction contains the client. Also capture matched zone and distance for dev debugging.
-          geoOk = geoRows.some((z: any) => {
-            const zoneLat = Number(z.latitude);
-            const zoneLon = Number(z.longitude);
-            const zoneRad = Number(z.radiusMeters);
-            const inside = isWithinGeoZone(clientCoord, { latitude: zoneLat, longitude: zoneLon }, zoneRad);
-            if (inside && matchedZoneId === null) {
-              matchedZoneId = z.id;
-              try {
-                matchedDistanceMeters = haversineDistance(clientCoord, { latitude: zoneLat, longitude: zoneLon });
-              } catch (e) {
-                matchedDistanceMeters = null;
-              }
-            }
-            return inside;
-          });
-        }
-      }
-
-      // Apply final rules (combined logic)
-      const dev = process.env.NODE_ENV !== 'production';
-
-      if (ipAssigned.length > 0 && geoAssigned.length > 0) {
-        // Both assigned: require both to pass
-        if (!ipOk) {
-          const debug: any = dev ? { clientIP, ipAssigned, ipDebugRows } : undefined;
-          return NextResponse.json({ error: 'You are not in the allowed IP range', code: 'IP_NOT_ALLOWED', debug }, { status: 403 });
-        }
-        if (!geoOk) {
-          const debug: any = dev ? { clientIP, coords: { latitude, longitude }, matchedZoneId, distanceMeters: matchedDistanceMeters } : undefined;
-          return NextResponse.json({ error: 'You are outside the allowed location radius', code: 'GEO_OUTSIDE', debug }, { status: 403 });
-        }
-      } else if (ipAssigned.length > 0) {
-        // Only IP assigned
-        if (!ipOk) {
-          const debug: any = dev ? { clientIP, ipAssigned, ipDebugRows } : undefined;
-          return NextResponse.json({ error: 'You are not in the allowed IP range', code: 'IP_NOT_ALLOWED', debug }, { status: 403 });
-        }
-      } else if (geoAssigned.length > 0) {
-        // Only GEO assigned
-        if (!geoOk) {
-          const debug: any = dev ? { clientIP, coords: { latitude, longitude }, matchedZoneId, distanceMeters: matchedDistanceMeters } : undefined;
-          if (geoInvalidCoords) {
-            return NextResponse.json({ error: 'Please enable GPS to check-in from allowed location.', code: 'GEO_MISSING', debug }, { status: 400 });
-          }
-          return NextResponse.json({ error: 'You are outside the allowed location radius', code: 'GEO_OUTSIDE', debug }, { status: 403 });
-        }
-      }
+      console.log('IP restriction passed');
     }
-    // ===== END IP/GEO VALIDATION =====
+  }
+}
 
-    // Get attendance settings
+      // Validate GEO Restrictions (only if IP restrictions passed or don't exist)
+      if (restrictionPassed && geoRestrictionAssignments.length > 0) {
+        console.log('Checking GEO restrictions...');
+        
+        const geoRestrictionIds = geoRestrictionAssignments.map(r => r.restrictionId);
+        
+        // FIXED: Use inArray instead of sql`ANY`
+        const geoZones = await db
+          .select({
+            id: geoRestrictions.id,
+            latitude: geoRestrictions.latitude,
+            longitude: geoRestrictions.longitude,
+            radiusMeters: geoRestrictions.radiusMeters,
+          })
+          .from(geoRestrictions)
+          .where(inArray(geoRestrictions.id, geoRestrictionIds));
+
+        console.log('Geo zones from DB:', geoZones);
+
+        // Parse and validate coordinates
+        const clientCoord = parseCoordinate(latitude, longitude);
+        console.log('Parsed client coordinates:', clientCoord);
+        
+        if (!clientCoord) {
+          restrictionPassed = false;
+          restrictionFailureCode = 'GEO_MISSING';
+          console.log('GEO restriction failed: Missing or invalid coordinates');
+        } else {
+          checkInLatitude = clientCoord.latitude.toString();
+          checkInLongitude = clientCoord.longitude.toString();
+          
+          // Check if current location is within ANY of the assigned geo zones
+          const geoMatch = geoZones.some(zone => {
+            const zoneCoord = {
+              latitude: Number(zone.latitude),
+              longitude: Number(zone.longitude)
+            };
+            
+            if (isNaN(zoneCoord.latitude) || isNaN(zoneCoord.longitude)) {
+              console.log('Invalid zone coordinates:', zone);
+              return false;
+            }
+            
+            const radius = Number(zone.radiusMeters);
+            if (isNaN(radius) || radius <= 0) {
+              console.log('Invalid radius:', zone.radiusMeters);
+              return false;
+            }
+            
+            const isWithin = isWithinGeoZone(clientCoord, zoneCoord, radius);
+            console.log(`Zone check: client (${clientCoord.latitude}, ${clientCoord.longitude}) vs zone (${zoneCoord.latitude}, ${zoneCoord.longitude}) radius ${radius}m -> ${isWithin}`);
+            
+            return isWithin;
+          });
+
+          console.log('Overall GEO match result:', geoMatch);
+
+          if (!geoMatch) {
+            restrictionPassed = false;
+            restrictionFailureCode = 'GEO_OUTSIDE';
+            console.log('GEO restriction failed: Outside allowed zones');
+          } else {
+            console.log('GEO restriction passed');
+          }
+        }
+      }
+    } else {
+      console.log('No restrictions assigned to employee, proceeding with check-in');
+    }
+
+    // If restrictions failed, return appropriate error
+    if (!restrictionPassed && restrictionFailureCode) {
+      const errorMessages: Record<string, { message: string; status: number }> = {
+        'IP_NOT_ALLOWED': { 
+          message: 'Your IP is not in the allowed range for check-in.', 
+          status: 403 
+        },
+        'GEO_OUTSIDE': { 
+          message: 'You are outside the allowed location radius. Check-in not permitted.', 
+          status: 403 
+        },
+        'GEO_MISSING': { 
+          message: 'Please enable GPS to check-in from allowed location.', 
+          status: 400 
+        },
+        'IP_UNKNOWN': { 
+          message: 'Unable to determine your IP address. Please check your connection.', 
+          status: 400 
+        },
+      };
+
+      const errorInfo = errorMessages[restrictionFailureCode] || { 
+        message: 'Restriction validation failed', 
+        status: 403 
+      };
+
+      console.log('Returning restriction error:', errorInfo.message);
+      
+      return NextResponse.json({ 
+        error: errorInfo.message, 
+        code: restrictionFailureCode 
+      }, { status: errorInfo.status });
+    }
+
+    // ===== ATTENDANCE CREATION =====
+    console.log('All restrictions passed, creating attendance record...');
+    
     const [settings] = await db.select().from(attendanceSettings).limit(1);
     if (!settings) {
       return NextResponse.json({ error: 'Attendance settings not configured' }, { status: 500 });
@@ -171,15 +261,12 @@ export async function POST(req: NextRequest) {
 
     if (existingRecord && existingRecord.checkIn) {
       return NextResponse.json(
-        {
-          error: 'Already checked in today',
-          attendance: existingRecord,
-        },
+        { error: 'Already checked in today', attendance: existingRecord },
         { status: 400 }
       );
     }
 
-    // Parse check-in settings times
+    // Calculate check-in status based on time windows
     const [checkInStartHour, checkInStartMinute] = settings.checkInStart
       .toString()
       .split(':')
@@ -192,76 +279,65 @@ export async function POST(req: NextRequest) {
     const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
     const checkInEndTotalMinutes = checkInEndHour * 60 + checkInEndMinute;
 
-    // Get actual check-in time in minutes
     const checkInHours = checkInTime.getHours();
     const checkInMinutes = checkInTime.getMinutes();
     const checkInTotalMinutes = checkInHours * 60 + checkInMinutes;
 
-    // Determine check-in status according to specifications
-    let status = 'present'; // Default to present (On Time)
+    let status = 'present';
     let lateMinutes = 0;
 
-    if (checkInTotalMinutes < checkInStartTotalMinutes) {
-      // Check-in happens before Check-in Start time - EARLY
-      // Store negative value to indicate early, or use a flag
-      status = 'early';
-      lateMinutes = checkInStartTotalMinutes - checkInTotalMinutes; // Store as positive but indicate early via status
-    } else if (checkInTotalMinutes > checkInEndTotalMinutes) {
-      // Check-in happens after Check-in End time - LATE
+    if (checkInTotalMinutes > checkInEndTotalMinutes) {
       status = 'late';
       lateMinutes = checkInTotalMinutes - checkInEndTotalMinutes;
+    } else if (checkInTotalMinutes < checkInStartTotalMinutes) {
+      status = 'early';
     }
-    // else: Check-in within Check-in Start-End range = On Time (present)
 
-    // Create or update attendance record
+    console.log('Check-in time analysis:', {
+      checkInTime: checkInTime.toISOString(),
+      checkInWindow: `${settings.checkInStart} - ${settings.checkInEnd}`,
+      status,
+      lateMinutes
+    });
+
+    // Create attendance record
+    const attendanceData = {
+      employeeId: employee.id,
+      date: today,
+      checkIn: checkInTime,
+      status,
+      lateMinutes,
+      workHours: '0',
+      restrictionPassed,
+      restrictionFailureCode,
+      checkInIp,
+      checkInLatitude,
+      checkInLongitude,
+      updatedAt: new Date(),
+    };
+
+    let resultRecord;
     if (existingRecord) {
-      const [updated] = await db
+      [resultRecord] = await db
         .update(attendance)
-        .set({
-          checkIn: checkInTime,
-          status,
-          lateMinutes,
-          updatedAt: new Date(),
-        })
+        .set(attendanceData)
         .where(eq(attendance.id, existingRecord.id))
         .returning();
-
-      const statusMsg = status === 'early' 
-        ? `Early by ${lateMinutes} minutes`
-        : status === 'late'
-        ? `Late by ${lateMinutes} minutes`
-        : 'On Time';
-
-      return NextResponse.json({
-        success: true,
-        message: `Checked in successfully (${statusMsg})`,
-        attendance: updated,
-      });
     } else {
-      const [newRecord] = await db
+      [resultRecord] = await db
         .insert(attendance)
-        .values({
-          employeeId: employee.id,
-          date: today,
-          checkIn: checkInTime,
-          status,
-          lateMinutes,
-          workHours: '0',
-        })
+        .values(attendanceData)
         .returning();
-
-      const statusMsg = status === 'early' 
-        ? `Early by ${lateMinutes} minutes`
-        : status === 'late'
-        ? `Late by ${lateMinutes} minutes`
-        : 'On Time';
-
-      return NextResponse.json({
-        success: true,
-        message: `Checked in successfully (${statusMsg})`,
-        attendance: newRecord,
-      });
     }
+
+    console.log('Check-in successful:', resultRecord);
+
+    return NextResponse.json({
+      success: true,
+      message: 'Checked in successfully',
+      attendance: resultRecord,
+    });
+
   } catch (error) {
     console.error('Check-in error:', error);
     return NextResponse.json(

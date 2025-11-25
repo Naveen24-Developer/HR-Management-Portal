@@ -57,6 +57,14 @@ export const attendance = pgTable('attendance', {
   employeeId: uuid('employee_id').references(() => employees.id).notNull(),
   date: date('date').notNull(),
   checkIn: timestamp('check_in'), // Full timestamp with date and time
+  // Audit fields for check-in
+  checkInIp: varchar('check_in_ip', { length: 45 }), // store IPv4/IPv6 string
+  checkInLatitude: decimal('check_in_latitude', { precision: 10, scale: 7 }),
+  checkInLongitude: decimal('check_in_longitude', { precision: 10, scale: 7 }),
+  // Whether the check-in passed restriction validation (IP/GEO)
+  restrictionPassed: boolean('restriction_passed'),
+  // If restrictionPassed === false, store failure code (eg. IP_NOT_ALLOWED / GEO_OUTSIDE)
+  restrictionFailureCode: varchar('restriction_failure_code', { length: 50 }),
   checkOut: timestamp('check_out'), // Full timestamp with date and time
   status: varchar('status', { length: 20 }).default('not_checked_in'), // not_checked_in, present, late, half_day, absent
   workHours: decimal('work_hours', { precision: 4, scale: 2 }).default('0'),
@@ -284,6 +292,22 @@ export const attendanceRelations = relations(attendance, ({ one }) => ({
   employee: one(employees, {
     fields: [attendance.employeeId],
     references: [employees.id],
+  }),
+}));
+
+// Add to your schema.ts relations section
+export const employeeRestrictionsRelations = relations(employeeRestrictions, ({ one }) => ({
+  employee: one(employees, {
+    fields: [employeeRestrictions.employeeId],
+    references: [employees.id],
+  }),
+  ipRestriction: one(ipRestrictions, {
+    fields: [employeeRestrictions.restrictionId],
+    references: [ipRestrictions.id],
+  }),
+  geoRestriction: one(geoRestrictions, {
+    fields: [employeeRestrictions.restrictionId],
+    references: [geoRestrictions.id],
   }),
 }));
 

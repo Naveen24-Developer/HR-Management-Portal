@@ -30,7 +30,7 @@ const ERROR_MESSAGES: Record<string, { title: string; message: string; icon: str
   // These entries map server/client error codes to the exact user-facing
   // alert strings requested.
   IP_NOT_ALLOWED: {
-    title: 'You are not in the allowed IP range',
+    title: 'Access denied. You are not in the allowed IP range.',
     message: '',
     icon: 'error',
   },
@@ -45,7 +45,7 @@ const ERROR_MESSAGES: Record<string, { title: string; message: string; icon: str
     icon: 'error',
   },
   GEO_MISSING: {
-    title: 'Please enable GPS to check-in from allowed location.',
+    title: 'Unable to validate your location. Please try again.',
     message: '',
     icon: 'error',
   },
