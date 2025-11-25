@@ -1,10 +1,7 @@
 //src/lib/auth/utils.ts
-import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+import { supabase } from '@/lib/supabase/client';
 
 /**
  * Return a JWT secret string.
@@ -29,7 +26,9 @@ export function getJwtSecret(): string {
 }
 
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// `supabase` is imported from `src/lib/supabase/client` and lazily initializes
+// when first used. This avoids build-time errors when environment variables
+// are not set during Next.js static analysis.
 
 export async function signIn(email: string, password: string) {
   const { data, error } = await supabase.auth.signInWithPassword({
