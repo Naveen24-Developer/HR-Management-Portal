@@ -1,9 +1,8 @@
 //src/contexts/AuthContext.tsx
 "use client";
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase/client';
 
 interface AuthContextType {
   user: User | null;
@@ -13,26 +12,82 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType>({ user: null, loading: true, logout: async () => {} });
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+// Safe lazy import to handle Supabase client initialization errors
+let supabaseClient: any = null;
+
+async function getSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  
+  try {
+    const { supabase } = await import('@/lib/supabase/client');
+    supabaseClient = supabase;
+    return supabase;
+  } catch (error) {
+    console.error('Failed to initialize Supabase client:', error);
+    return null;
+  }
+}
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initError, setInitError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    const getSession = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        setUser(session?.user ?? null);
-        setLoading(false);
-    }
-    getSession();
+    let isMounted = true;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    const initAuth = async () => {
+      try {
+        const supabase = await getSupabaseClient();
+        
+        if (!supabase) {
+          console.warn('Supabase client not available');
+          if (isMounted) {
+            setLoading(false);
+          }
+          return;
+        }
+
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          console.error('Error fetching session:', sessionError);
+          if (isMounted) {
+            setInitError(sessionError.message);
+          }
+        } else {
+          if (isMounted) {
+            setUser(session?.user ?? null);
+          }
+        }
+
+        const { data: { subscription }, error: listenerError } = supabase.auth.onAuthStateChange((_event: string, session: any) => {
+          if (isMounted) {
+            setUser(session?.user ?? null);
+          }
+        });
+
+        if (isMounted) {
+          setLoading(false);
+        }
+
+        return () => {
+          subscription?.unsubscribe();
+        };
+      } catch (error) {
+        console.error('Error initializing auth:', error);
+        if (isMounted) {
+          setInitError(error instanceof Error ? error.message : 'Unknown error');
+          setLoading(false);
+        }
+      }
+    };
+
+    initAuth();
 
     return () => {
-      subscription?.unsubscribe();
+      isMounted = false;
     };
   }, []);
 
@@ -42,28 +97,53 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
-      });
+      }).catch(e => console.log('Logout fetch error (non-blocking):', e));
     } catch (e) {
-      // ignore network errors here
+      // ignore
     }
 
     try {
-      await supabase.auth.signOut();
-    } catch (e) {}
+      const supabase = await getSupabaseClient();
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
+    } catch (e) {
+      console.error('Supabase sign out error:', e);
+    }
 
     try {
       localStorage.removeItem('auth-token');
       localStorage.removeItem('auth-permissions');
-    } catch (e) {}
+    } catch (e) {
+      // ignore
+    }
     setUser(null);
 
     try {
-      // Replace current history entry with login so back doesn't return to protected page
       router.replace('/login');
-    } catch (e) {}
+    } catch (e) {
+      console.error('Router error:', e);
+    }
   };
 
-  return <AuthContext.Provider value={{ user, loading, logout }}>{children}</AuthContext.Provider>;
+  // If there's an init error but app still needs to load, render children
+  // User will see app but auth won't work until they reload or Supabase is available
+  return (
+    <AuthContext.Provider value={{ user, loading, logout }}>
+      {children}
+      {initError && process.env.NODE_ENV === 'development' && (
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#fef08a', padding: '1rem', fontSize: '0.875rem', zIndex: 9999 }}>
+          <strong>Auth Init Error (dev only):</strong> {initError}
+        </div>
+      )}
+    </AuthContext.Provider>
+  );
 };
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
