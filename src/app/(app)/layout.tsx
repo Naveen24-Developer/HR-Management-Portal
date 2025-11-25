@@ -24,7 +24,6 @@ import {
 
 const navigation = [
   { name: 'Dashboard', href: '/admin', icon: HomeIcon },
-  { name: 'HR Management', href: '/admin/hr-management', icon: UsersIcon },
   { name: 'Employee Management', href: '/admin/employees', icon: UserGroupIcon },
   { name: 'Attendance', href: '/admin/attendance', icon: ClockIcon },
   { name: 'Leave Management', href: '/admin/leave', icon: CalendarIcon },
