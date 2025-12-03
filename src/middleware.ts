@@ -10,8 +10,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Redirect root to dashboard (common for all roles)
+  // Check if user has auth token
+  const authToken = request.cookies.get('auth-token')?.value;
+  
+  // Redirect root to login if no auth token, otherwise to dashboard
   if (pathname === '/') {
+    if (!authToken) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
     return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
@@ -21,9 +27,14 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(newPath, request.url));
   }
 
+  // Protected routes - redirect to login if no auth token
+  if (pathname.startsWith('/dashboard')) {
+    if (!authToken) {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
+
   // All other routes proceed normally
-  // Page-level and API-level protection should be performed via
-  // token verification and permissions checks
   return NextResponse.next();
 }
 
