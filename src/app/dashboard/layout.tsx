@@ -1,6 +1,6 @@
 // src/app/dashboard/layout.tsx
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter, usePathname } from 'next/navigation';
 import {
@@ -25,6 +25,32 @@ export default function DashboardLayout({
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setProfileDropdown(false);
+      }
+    };
+
+    const handleEscapeKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setProfileDropdown(false);
+      }
+    };
+
+    if (profileDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscapeKey);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [profileDropdown]);
 
   // Get dynamic title based on role
   const getHeaderTitle = () => {
@@ -134,7 +160,7 @@ export default function DashboardLayout({
             </button>
 
             {/* Profile dropdown */}
-            <div className="relative">
+            <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setProfileDropdown(!profileDropdown)}
                 className="flex items-center space-x-2 text-sm hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors"
@@ -150,7 +176,7 @@ export default function DashboardLayout({
                 <div className="absolute right-0 w-56 mt-2 bg-white rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50">
                   <div className="p-3 border-b border-gray-100">
                     <p className="text-sm font-medium text-gray-900">
-                      {user?.firstName} {user?.lastName}
+                      {user?.firstName || 'User'} {user?.lastName || ''}
                     </p>
                     <p className="text-xs text-gray-500 mt-0.5">{user?.email}</p>
                     {user?.roleName && (
@@ -180,7 +206,10 @@ export default function DashboardLayout({
                     </button>
                     <div className="border-t border-gray-100 my-1"></div>
                     <button
-                      onClick={logout}
+                      onClick={async () => {
+                        setProfileDropdown(false);
+                        await logout();
+                      }}
                       className="flex items-center w-full px-4 py-2 text-sm text-left text-red-700 hover:bg-red-50"
                     >
                       <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

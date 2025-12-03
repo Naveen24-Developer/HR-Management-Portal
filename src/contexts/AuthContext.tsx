@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 
+
 interface AuthUser {
   id?: string;
   email?: string;
@@ -164,12 +165,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } catch (e) {
       // ignore
     }
+    
+    // Clear user state
     setUser(null);
 
+    // Navigate to login page - using push with window.location as fallback
     try {
-      router.replace('/login');
+      await router.push('/login');
     } catch (e) {
-      console.error('Router error:', e);
+      console.error('Router navigation error, using window.location:', e);
+      window.location.href = '/login';
     }
   };
 
