@@ -11,18 +11,18 @@ import {
   userProfiles 
 } from '@/lib/database/schema';
 import { eq, and, gte, lte, count, sum, avg, sql, between } from 'drizzle-orm';
-import { verifyToken } from '@/lib/auth/utils';
+import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
 
 // GET - Generate report
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decoded = verifyToken(token);
-    if (decoded.role !== 'admin') {
+    if (!decoded || decoded.role !== 'admin') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

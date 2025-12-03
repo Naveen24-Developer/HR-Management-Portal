@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
         .limit(1);
 
       let adminUser;
+      let createdAdminId: string | null = null;
 
       if (adminUserResult.length === 0) {
         // Create admin user
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest) {
         }).returning({ id: users.id });
 
         const adminId = newAdmin[0].id;
+        createdAdminId = adminId;
 
         await db.insert(userProfiles).values({
           userId: adminId,
@@ -63,7 +65,7 @@ export async function POST(request: NextRequest) {
       // Generate JWT token for admin so they can check in
       const adminUserRecord = adminUserResult.length > 0 
         ? adminUserResult[0] 
-        : { id: newAdmin[0].id, role: 'admin', email: 'admin@hrms.com' };
+        : { id: createdAdminId!, role: 'admin', email: 'admin@hrms.com' };
       
       // Ensure admin has an employee record (required for attendance check-in)
       const adminUserId = adminUserRecord.id;
@@ -119,16 +121,24 @@ export async function POST(request: NextRequest) {
       const response = NextResponse.json({
         success: true,
         message: 'Login successful',
-        user: adminUser,
+        user: {
+          id: adminUserRecord.id,
+          email: adminUserRecord.email,
+          role: adminUserRecord.role || 'admin',
+          username: 'Admin',
+          firstName: adminUser.firstName || 'System',
+          lastName: adminUser.lastName || 'Administrator',
+        },
         token: adminToken
       });
 
-      // Set session cookie
-      response.cookies.set('hrms-session', 'admin-authenticated', {
+      // Set HTTP-only auth token cookie so server-side endpoints can use it
+      response.cookies.set('auth-token', adminToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 60 * 60 * 24 // 24 hours
+        path: '/',
+        maxAge: 60 * 60 * 24 * 7, // 7 days
       });
 
       return response;
@@ -173,7 +183,13 @@ export async function POST(request: NextRequest) {
 
     // Fetch assigned role (first assignment) and permissions
     const roleAssignment = await db
-      .select({ roleId: userRoles.roleId, roleName: roles.name, permissions: roles.permissions })
+      .select({ 
+        roleId: userRoles.roleId, 
+        roleName: roles.name, 
+        permissions: roles.permissions,
+        sidebarPermissions: roles.sidebarPermissions,
+        pagePermissions: roles.pagePermissions
+      })
       .from(userRoles)
       .leftJoin(roles, eq(userRoles.roleId, roles.id))
       .where(eq(userRoles.userId, userRow.id))
@@ -182,28 +198,57 @@ export async function POST(request: NextRequest) {
     let assignedRoleId: string | undefined = undefined;
     let assignedRoleName: string | undefined = undefined;
     let permissions: any = {};
+    let sidebarPermissions: string[] = [];
+    let pagePermissions: string[] = [];
 
     if (roleAssignment.length > 0) {
       assignedRoleId = (roleAssignment[0] as any).roleId;
       assignedRoleName = (roleAssignment[0] as any).roleName;
       permissions = (roleAssignment[0] as any).permissions || {};
+      sidebarPermissions = (roleAssignment[0] as any).sidebarPermissions || [];
+      pagePermissions = (roleAssignment[0] as any).pagePermissions || [];
+      
       try {
         if (typeof permissions === 'string') permissions = JSON.parse(permissions);
+        if (typeof sidebarPermissions === 'string') sidebarPermissions = JSON.parse(sidebarPermissions);
+        if (typeof pagePermissions === 'string') pagePermissions = JSON.parse(pagePermissions);
       } catch (e) {
         permissions = {};
+        sidebarPermissions = [];
+        pagePermissions = [];
       }
     }
 
-    const token = generateToken({ id: userRow.id, role: userRow.role, email: userRow.email }, { roleId: assignedRoleId, permissions });
+    const token = generateToken(
+      { id: userRow.id, role: userRow.role, email: userRow.email }, 
+      { roleId: assignedRoleId, roleName: assignedRoleName, permissions, sidebarPermissions, pagePermissions }
+    );
 
-    const response = NextResponse.json({ success: true, message: 'Login successful', user: { id: userRow.id, email: userRow.email, role: userRow.role, roleId: assignedRoleId, roleName: assignedRoleName, permissions }, token });
-    // set session cookie for compatibility
-    response.cookies.set('hrms-session', 'user-authenticated', {
+    const response = NextResponse.json({ 
+      success: true, 
+      message: 'Login successful', 
+      user: { 
+        id: userRow.id, 
+        email: userRow.email, 
+        role: userRow.role, 
+        roleId: assignedRoleId, 
+        roleName: assignedRoleName, 
+        permissions,
+        sidebarPermissions,
+        pagePermissions
+      }, 
+      token 
+    });
+
+    // Set HTTP-only auth token cookie so server-side endpoints can use it
+    response.cookies.set('auth-token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 60 * 60 * 24,
+      path: '/',
+      maxAge: 60 * 60 * 24 * 7,
     });
+
     return response;
   } catch (error) {
     console.error(error);

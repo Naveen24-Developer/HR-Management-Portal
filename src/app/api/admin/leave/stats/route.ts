@@ -1,82 +1,168 @@
-// app/api/admin/leave/stats/route.ts
+// src/app/api/admin/leave/stats/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
-import { leaveRequests, employees, users } from '@/lib/database/schema';
-import { eq, and, gte, lte, count, sql } from 'drizzle-orm';
+import { leaveRequests, employees, leaveBalances } from '@/lib/database/schema';
+import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth/utils';
 
+export const dynamic = 'force-dynamic';
+
+/**
+ * GET /api/leave/stats
+ * Returns leave statistics for the current user or all users (for admin)
+ */
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = request.cookies.get('auth-token')?.value || 
+                  request.headers.get('authorization')?.replace('Bearer ', '');
+
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const decoded = verifyToken(token);
-    if (decoded.role !== 'admin') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const decoded = await verifyToken(token);
+    if (!decoded?.id) {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
-    const today = new Date();
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const isAdmin = decoded.role === 'admin';
+    
+    // Get employee record
+    const employee = await db
+      .select()
+      .from(employees)
+      .where(eq(employees.userId, decoded.id))
+      .limit(1);
 
-    // Get total leave requests
-    const totalRequestsResult = await db
-      .select({ count: count() })
+    if (!employee.length && !isAdmin) {
+      return NextResponse.json(
+        { error: 'Employee record not found' },
+        { status: 404 }
+      );
+    }
+
+    const employeeId = employee[0]?.id;
+
+    // Get current month range
+    const now = new Date();
+    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    // Total requests (all time)
+    let totalRequestsQuery = db
+      .select({ count: sql<number>`count(*)` })
       .from(leaveRequests);
 
-    // Get pending requests
-    const pendingRequestsResult = await db
-      .select({ count: count() })
+    if (!isAdmin && employeeId) {
+      totalRequestsQuery = totalRequestsQuery.where(eq(leaveRequests.employeeId, employeeId));
+    }
+
+    const totalResult = await totalRequestsQuery;
+    const totalRequests = Number(totalResult[0]?.count || 0);
+
+    // Pending requests
+    let pendingQuery = db
+      .select({ count: sql<number>`count(*)` })
       .from(leaveRequests)
       .where(eq(leaveRequests.status, 'pending'));
 
-    // Get approved this month
-    const approvedThisMonthResult = await db
-      .select({ count: count() })
+    if (!isAdmin && employeeId) {
+      pendingQuery = pendingQuery.where(
+        and(
+          eq(leaveRequests.employeeId, employeeId),
+          eq(leaveRequests.status, 'pending')
+        )
+      );
+    }
+
+    const pendingResult = await pendingQuery;
+    const pendingRequests = Number(pendingResult[0]?.count || 0);
+
+    // Approved this month
+    let approvedThisMonthQuery = db
+      .select({ count: sql<number>`count(*)` })
       .from(leaveRequests)
       .where(
         and(
           eq(leaveRequests.status, 'approved'),
-          gte(leaveRequests.createdAt, monthStart),
-          lte(leaveRequests.createdAt, monthEnd)
+          gte(leaveRequests.approvedAt, firstDayOfMonth),
+          lte(leaveRequests.approvedAt, lastDayOfMonth)
         )
       );
 
-    // Get rejected this month
-    const rejectedThisMonthResult = await db
-      .select({ count: count() })
+    if (!isAdmin && employeeId) {
+      approvedThisMonthQuery = approvedThisMonthQuery.where(
+        eq(leaveRequests.employeeId, employeeId)
+      );
+    }
+
+    const approvedResult = await approvedThisMonthQuery;
+    const approvedThisMonth = Number(approvedResult[0]?.count || 0);
+
+    // Rejected this month
+    let rejectedThisMonthQuery = db
+      .select({ count: sql<number>`count(*)` })
       .from(leaveRequests)
       .where(
         and(
           eq(leaveRequests.status, 'rejected'),
-          gte(leaveRequests.createdAt, monthStart),
-          lte(leaveRequests.createdAt, monthEnd)
+          gte(leaveRequests.approvedAt, firstDayOfMonth),
+          lte(leaveRequests.approvedAt, lastDayOfMonth)
         )
       );
 
-    // Calculate leave balance (mock data - in real app, this would come from employee leave balances)
-    const leaveBalance = {
-      sick: 12,
-      casual: 8,
-      earned: 21,
+    if (!isAdmin && employeeId) {
+      rejectedThisMonthQuery = rejectedThisMonthQuery.where(
+        eq(leaveRequests.employeeId, employeeId)
+      );
+    }
+
+    const rejectedResult = await rejectedThisMonthQuery;
+    const rejectedThisMonth = Number(rejectedResult[0]?.count || 0);
+
+    // Get leave balance for current user (if employee)
+    let leaveBalance = {
+      sick: 0,
+      casual: 0,
+      earned: 0,
+      maternity: 0,
+      paternity: 0,
     };
 
-    const stats = {
-      totalRequests: totalRequestsResult[0]?.count || 0,
-      pendingRequests: pendingRequestsResult[0]?.count || 0,
-      approvedThisMonth: approvedThisMonthResult[0]?.count || 0,
-      rejectedThisMonth: rejectedThisMonthResult[0]?.count || 0,
-      leaveBalance,
-    };
+    if (employeeId) {
+      const currentYear = now.getFullYear();
+      const balances = await db
+        .select()
+        .from(leaveBalances)
+        .where(
+          and(
+            eq(leaveBalances.employeeId, employeeId),
+            eq(leaveBalances.year, currentYear)
+          )
+        );
+
+      balances.forEach((balance) => {
+        const leaveType = balance.leaveType.toLowerCase();
+        if (leaveType in leaveBalance) {
+          leaveBalance[leaveType as keyof typeof leaveBalance] = balance.availableQuota || 0;
+        }
+      });
+    }
 
     return NextResponse.json({
       success: true,
-      stats,
+      stats: {
+        totalRequests,
+        pendingRequests,
+        approvedThisMonth,
+        rejectedThisMonth,
+        myPendingRequests: pendingRequests, // Same for now
+        leaveBalance,
+      },
     });
+
   } catch (error) {
-    console.error('Leave stats GET error:', error);
+    console.error('Failed to fetch leave stats:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

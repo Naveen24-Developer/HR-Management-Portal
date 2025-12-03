@@ -3,18 +3,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
 import { projects, departments, employees, userProfiles, users, projectTeam } from '@/lib/database/schema';
 import { eq, and, desc, count, sql } from 'drizzle-orm';
-import { verifyToken } from '@/lib/auth/utils';
+import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
+import { canPerformAction } from '@/lib/auth/permissions';
 
 // GET - Fetch projects
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decoded = verifyToken(token);
-    if (!decoded || decoded.role !== 'admin') {
+    if (!decoded) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Check for 'view' permission on projects module
+    if (!canPerformAction(decoded.role, decoded.permissions, 'projects', 'view')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -94,13 +100,18 @@ export async function GET(request: NextRequest) {
 // POST - Create new project
 export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decoded = verifyToken(token);
-    if (!decoded || decoded.role !== 'admin') {
+    if (!decoded) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Check for 'create' permission on projects module
+    if (!canPerformAction(decoded.role, decoded.permissions, 'projects', 'create')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

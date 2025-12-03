@@ -1,0 +1,1 @@
+ALTER TABLE "attendance_settings" ADD COLUMN "enable_attendance_rules" boolean DEFAULT true NOT NULL;

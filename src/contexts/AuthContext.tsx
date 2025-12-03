@@ -2,10 +2,23 @@
 "use client";
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { User } from '@supabase/supabase-js';
+
+interface AuthUser {
+  id?: string;
+  email?: string;
+  role?: string;
+  firstName?: string;
+  lastName?: string;
+  roleId?: string;
+  roleName?: string;
+  permissions?: Record<string, Record<string, boolean>>;
+  sidebarPermissions?: string[];
+  pagePermissions?: string[];
+  [key: string]: any;
+}
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
   logout: () => Promise<void>;
 }
@@ -29,7 +42,7 @@ async function getSupabaseClient() {
 }
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
   const router = useRouter();
@@ -50,26 +63,60 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         }
 
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
+
         if (sessionError) {
           console.error('Error fetching session:', sessionError);
           if (isMounted) {
             setInitError(sessionError.message);
           }
         } else {
-          if (isMounted) {
-            setUser(session?.user ?? null);
+          // keep supabase user info available, but we will augment with our server-side /api/auth/me
+          if (isMounted && session?.user) {
+            setUser((prev) => ({ ...(prev ?? {}), ...(session.user as any) }));
           }
         }
 
         const { data: { subscription }, error: listenerError } = supabase.auth.onAuthStateChange((_event: string, session: any) => {
           if (isMounted) {
-            setUser(session?.user ?? null);
+            setUser((prev) => ({ ...(prev ?? {}), ...(session?.user ?? {}) }));
           }
         });
 
-        if (isMounted) {
-          setLoading(false);
+        // After supabase init, try to get application-level user info (role, permissions)
+        // Prefer server cookie `auth-token`, otherwise use token from localStorage.
+        try {
+          const tokenFromStorage = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+          const headers: any = {};
+          if (tokenFromStorage) headers['Authorization'] = `Bearer ${tokenFromStorage}`;
+
+          const meRes = await fetch('/api/auth/me', {
+            method: 'GET',
+            headers,
+            credentials: 'include',
+          });
+
+          if (meRes.ok) {
+            const json = await meRes.json();
+            if (json?.user && isMounted) {
+              // merge permissions if also stored in localStorage
+              let perms = json.user.permissions ?? null;
+              try {
+                const storedPerms = typeof window !== 'undefined' ? localStorage.getItem('auth-permissions') : null;
+                if (storedPerms && !perms) {
+                  perms = JSON.parse(storedPerms);
+                }
+              } catch (e) {
+                // ignore
+              }
+              const mergedUser = { ...json.user, permissions: perms };
+              setUser(mergedUser);
+            }
+          }
+        } catch (e) {
+          // ignore me fetch errors; app can still function using supabase session info
+          console.warn('Failed to fetch /api/auth/me:', e);
+        } finally {
+          if (isMounted) setLoading(false);
         }
 
         return () => {

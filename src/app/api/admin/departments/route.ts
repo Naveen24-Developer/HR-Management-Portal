@@ -20,9 +20,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Get departments with employee counts (use count helper to avoid raw SQL template issues)
-    // Note: don't filter by employees.isActive in the WHERE because that would turn the LEFT JOIN
-    // into an INNER JOIN and exclude departments with zero employees. Count includes all employees.
+    // Get departments with active employee counts only
     const departmentsWithCounts = await db
       .select({
         id: departments.id,
@@ -33,7 +31,13 @@ export async function GET(request: NextRequest) {
         employeeCount: count(employees.id),
       })
       .from(departments)
-      .leftJoin(employees, eq(employees.departmentId, departments.id))
+      .leftJoin(
+        employees, 
+        and(
+          eq(employees.departmentId, departments.id),
+          eq(employees.isActive, true)
+        )
+      )
       .groupBy(departments.id, departments.name, departments.description, departments.isActive, departments.createdAt)
       .orderBy(departments.name);
 

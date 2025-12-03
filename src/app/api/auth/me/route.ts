@@ -1,3 +1,4 @@
+// src/app/api/auth/me/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
 import { users, userProfiles, employees, departments } from '@/lib/database/schema';
@@ -51,11 +52,30 @@ export async function GET(request: NextRequest) {
       lastName: profile?.lastName,
     };
 
+    // Include permissions, sidebar, and page permissions from the token if present
+    if (decoded.permissions) {
+      userResponse.permissions = decoded.permissions;
+    }
+    if (decoded.sidebarPermissions) {
+      userResponse.sidebarPermissions = decoded.sidebarPermissions;
+    }
+    if (decoded.pagePermissions) {
+      userResponse.pagePermissions = decoded.pagePermissions;
+    }
+    if (decoded.roleId) {
+      userResponse.roleId = decoded.roleId;
+    }
+    if (decoded.roleName) {
+      userResponse.roleName = decoded.roleName;
+    }
+
     if (user.role === 'employee' && employee) {
       userResponse.employee = {
         employeeId: employee.employeeId,
         department: department?.name,
       };
+      // Add employeeId at root level for easier access
+      userResponse.employeeId = employee.id;
     }
 
     return NextResponse.json({ user: userResponse });

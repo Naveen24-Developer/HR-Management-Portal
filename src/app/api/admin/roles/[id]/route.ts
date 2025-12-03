@@ -9,6 +9,8 @@ const updateRoleSchema = z.object({
   name: z.string().min(1, 'Role name is required'),
   description: z.string().optional(),
   permissions: z.record(z.record(z.boolean())),
+  sidebarPermissions: z.array(z.string()).optional().default([]),
+  pagePermissions: z.array(z.string()).optional().default([]),
 });
 
 // GET /api/admin/roles/[id] - Get role by ID
@@ -121,6 +123,8 @@ export async function PUT(
         name: validatedData.name,
         description: validatedData.description,
         permissions: validatedData.permissions,
+        sidebarPermissions: validatedData.sidebarPermissions,
+        pagePermissions: validatedData.pagePermissions,
         updatedAt: new Date(),
       })
       .where(eq(roles.id, id))
@@ -177,14 +181,23 @@ export async function DELETE(
       return NextResponse.json({ error: 'Role not found' }, { status: 404 });
     }
 
-    if (existingRole[0].isSystem || existingRole[0].isDefault) {
+    if (existingRole[0].isSystem) {
+      console.log(`DELETE attempt blocked: ${existingRole[0].name} is a system role`);
       return NextResponse.json(
-        { error: 'System or default roles cannot be deleted' },
+        { error: `Cannot delete system role "${existingRole[0].name}"` },
         { status: 400 }
       );
     }
 
-    // Check if role has assigned users
+    if (existingRole[0].isDefault) {
+      console.log(`DELETE attempt blocked: ${existingRole[0].name} is a default role`);
+      return NextResponse.json(
+        { error: `Cannot delete default role "${existingRole[0].name}"` },
+        { status: 400 }
+      );
+    }
+
+    // Check REAL-TIME count of assigned users (not the stored count)
     const userCountResult = await db
       .select({ count: count() })
       .from(userRoles)
@@ -193,14 +206,19 @@ export async function DELETE(
     const userCount = userCountResult[0]?.count || 0;
     
     if (userCount > 0) {
+      console.log(`DELETE attempt blocked: ${existingRole[0].name} has ${userCount} assigned user(s)`);
       return NextResponse.json(
-        { error: 'Cannot delete role with assigned users' },
+        { 
+          error: `Cannot delete role "${existingRole[0].name}". It has ${userCount} employee(s) assigned. Please remove all employees before deleting.`,
+          userCount 
+        },
         { status: 400 }
       );
     }
 
     await db.delete(roles).where(eq(roles.id, id));
 
+    console.log(`Role deleted successfully: ${existingRole[0].name}`);
     return NextResponse.json({ message: 'Role deleted successfully' });
   } catch (error) {
     console.error('Failed to delete role:', error);

@@ -1,26 +1,34 @@
-// app/api/admin/leave/[id]/approve/route.ts
+// src/app/api/admin/leave/[id]/reject/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
 import { leaveRequests } from '@/lib/database/schema';
 import { eq } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth/utils';
 
+export const dynamic = 'force-dynamic';
+
+/**
+ * PUT /api/leave/:id/approve
+ * Approves a leave request
+ */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = request.cookies.get('auth-token')?.value || 
+                  request.headers.get('authorization')?.replace('Bearer ', '');
+
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const decoded = verifyToken(token);
-    if (decoded.role !== 'admin') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const decoded = await verifyToken(token);
+    if (!decoded?.id) {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     }
 
-    const requestId = params.id;
+    const { id: requestId } = await params;
 
     // Get the leave request
     const leaveRequest = await db
@@ -29,41 +37,63 @@ export async function PUT(
       .where(eq(leaveRequests.id, requestId))
       .limit(1);
 
-    if (leaveRequest.length === 0) {
+    if (!leaveRequest.length) {
       return NextResponse.json(
         { error: 'Leave request not found' },
         { status: 404 }
       );
     }
 
+    // Check if user is authorized to approve
+    // User can approve if they are admin or the designated approver WITH approve permission
+    const isAdmin = decoded.role === 'admin';
+    const isApprover = leaveRequest[0].approverId === decoded.id;
+
+    if (!isAdmin && !isApprover) {
+      return NextResponse.json(
+        { error: 'Not authorized to approve this request' },
+        { status: 403 }
+      );
+    }
+
+    // For non-admin approvers, verify they have approve permission
+    if (!isAdmin && isApprover) {
+      const hasApprovePermission = decoded.permissions?.leave?.approve === true;
+      if (!hasApprovePermission) {
+        return NextResponse.json(
+          { error: 'You do not have permission to approve leave requests' },
+          { status: 403 }
+        );
+      }
+    }
+
+    // Check if already processed
     if (leaveRequest[0].status !== 'pending') {
       return NextResponse.json(
-        { error: 'Leave request is not pending' },
+        { error: `Request is already ${leaveRequest[0].status}` },
         { status: 400 }
       );
     }
 
-    // Update leave request status to approved
-    await db
+    // Update the leave request
+    const updated = await db
       .update(leaveRequests)
       .set({
         status: 'approved',
-        approvedBy: decoded.userId,
+        approvedBy: decoded.id,
         approvedAt: new Date(),
       })
-      .where(eq(leaveRequests.id, requestId));
-
-    // In a real application, you would also:
-    // 1. Deduct from employee's leave balance
-    // 2. Send notification to employee
-    // 3. Update calendar events
+      .where(eq(leaveRequests.id, requestId))
+      .returning();
 
     return NextResponse.json({
       success: true,
       message: 'Leave request approved successfully',
+      leaveRequest: updated[0],
     });
+
   } catch (error) {
-    console.error('Leave approve PUT error:', error);
+    console.error('Failed to approve leave request:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

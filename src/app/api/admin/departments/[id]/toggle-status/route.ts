@@ -3,16 +3,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
 import { departments } from '@/lib/database/schema';
 import { eq } from 'drizzle-orm';
+import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
 
 // Demo/simple auth helper: accept either a Bearer token or the hrms-session cookie
 async function verifyAuth(request: NextRequest) {
-  const authHeader = request.headers.get('authorization');
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '') : null;
-  const sessionCookie = request.cookies.get('hrms-session');
+  const token = getTokenFromRequest(request);
 
   if (token) {
     try {
-      const { verifyToken } = await import('@/lib/auth/utils');
       const decoded = verifyToken(token);
       if (decoded) return decoded;
     } catch (e) {
@@ -20,6 +18,7 @@ async function verifyAuth(request: NextRequest) {
     }
   }
 
+  const sessionCookie = request.cookies.get('hrms-session');
   if (sessionCookie) {
     return { id: '1', role: 'admin', email: 'admin@hrms.com' };
   }

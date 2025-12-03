@@ -8,7 +8,8 @@ export const users = pgTable('users', {
   authId: uuid('auth_id'), // References auth.users(id) in Supabase
   email: varchar('email', { length: 255 }).notNull().unique(),
   password: text('password').notNull(),
-  role: varchar('role', { length: 20, enum: ['admin', 'hr', 'employee'] }).notNull(),
+  // Base role: 'admin' has full access, 'employee' uses assigned roles from userRoles table
+  role: varchar('role', { length: 20 }).notNull().default('employee'),
   isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -67,6 +68,10 @@ export const attendance = pgTable('attendance', {
   restrictionFailureCode: varchar('restriction_failure_code', { length: 50 }),
   checkOut: timestamp('check_out'), // Full timestamp with date and time
   status: varchar('status', { length: 20 }).default('not_checked_in'), // not_checked_in, present, late, half_day, absent
+  checkInStatus: varchar('check_in_status', { length: 20 }), // early, on_time, late
+  checkInDuration: integer('check_in_duration').default(0), // Minutes early (negative) or late (positive)
+  checkOutStatus: varchar('check_out_status', { length: 20 }), // early, on_time, over_time
+  checkOutDuration: integer('check_out_duration').default(0), // Minutes early (negative) or overtime (positive)
   workHours: decimal('work_hours', { precision: 4, scale: 2 }).default('0'),
   lateMinutes: integer('late_minutes').default(0), // Minutes late after grace period
   earlyCheckout: boolean('early_checkout').default(false), // If checked out before minimum work hours
@@ -96,15 +101,55 @@ export const attendanceSettings = pgTable('attendance_settings', {
 export const leaveRequests = pgTable('leave_requests', {
   id: uuid('id').defaultRandom().primaryKey(),
   employeeId: uuid('employee_id').references(() => employees.id),
-  leaveType: varchar('leave_type', { length: 50 }).notNull(), // sick, casual, annual, emergency
+  approverId: uuid('approver_id').references(() => users.id), // Who will approve this request
+  leaveType: varchar('leave_type', { length: 50 }).notNull(), // sick, casual, earned, maternity, paternity
   startDate: date('start_date').notNull(),
   endDate: date('end_date').notNull(),
   days: integer('days').notNull(),
   reason: text('reason'),
   status: varchar('status', { length: 20 }).default('pending'), // pending, approved, rejected
-  approvedBy: uuid('approved_by').references(() => users.id),
+  approvedBy: uuid('approved_by').references(() => users.id), // Who actually approved/rejected
   approvedAt: timestamp('approved_at'),
+  rejectionReason: text('rejection_reason'), // Reason for rejection
+  emergencyContact: varchar('emergency_contact', { length: 100 }),
+  handoverNotes: text('handover_notes'),
+  documentUrl: text('document_url'),
+  isManualEntry: boolean('is_manual_entry').default(false), // True if admin created manually
+  manualEntryBy: uuid('manual_entry_by').references(() => users.id),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Leave Policies
+export const leavePolicies = pgTable('leave_policies', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  leaveType: varchar('leave_type', { length: 50 }).notNull().unique(),
+  displayName: varchar('display_name', { length: 100 }).notNull(),
+  annualQuota: integer('annual_quota').notNull().default(0),
+  maxConsecutiveDays: integer('max_consecutive_days'),
+  requiresDocument: boolean('requires_document').default(false),
+  requiresApproval: boolean('requires_approval').default(true),
+  carryForwardEnabled: boolean('carry_forward_enabled').default(false),
+  maxCarryForward: integer('max_carry_forward').default(0),
+  minNoticeDays: integer('min_notice_days').default(0),
+  description: text('description'),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Leave Balances
+export const leaveBalances = pgTable('leave_balances', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  employeeId: uuid('employee_id').references(() => employees.id).notNull(),
+  leaveType: varchar('leave_type', { length: 50 }).notNull(),
+  year: integer('year').notNull(),
+  totalQuota: integer('total_quota').notNull().default(0),
+  usedQuota: integer('used_quota').notNull().default(0),
+  pendingQuota: integer('pending_quota').notNull().default(0),
+  availableQuota: integer('available_quota').notNull().default(0),
+  carriedForward: integer('carried_forward').notNull().default(0),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Projects
@@ -169,6 +214,8 @@ export const roles = pgTable('roles', {
   name: varchar('name', { length: 100 }).notNull().unique(),
   description: text('description'),
   permissions: jsonb('permissions').notNull(),
+  sidebarPermissions: jsonb('sidebar_permissions').default('[]'),
+  pagePermissions: jsonb('page_permissions').default('[]'),
   isDefault: boolean('is_default').default(false),
   isSystem: boolean('is_system').default(false), // system roles cannot be deleted/modified
   usersCount: integer('users_count').default(0),

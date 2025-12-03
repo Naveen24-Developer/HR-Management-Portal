@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
 import { attendance, employees, userProfiles, departments, attendanceSettings } from '@/lib/database/schema';
 import { eq, desc } from 'drizzle-orm';
-import { verifyToken } from '@/lib/auth/utils';
+import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
 
 interface AttendanceRecord {
   id: string;
@@ -49,7 +49,7 @@ function formatStatus(
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

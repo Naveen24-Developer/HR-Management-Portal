@@ -60,20 +60,46 @@ export async function POST(
       );
     }
 
-    // Assign role
-    await db.insert(userRoles).values({
-      userId: validatedData.userId,
-      roleId: id,
-      assignedAt: new Date(),
-    });
+    // ONE EMPLOYEE = ONE ROLE: Remove existing role assignments before assigning new one
+    const existingRoles = await db
+      .select({ roleId: userRoles.roleId })
+      .from(userRoles)
+      .where(eq(userRoles.userId, validatedData.userId));
 
-    // Update users count
-    await db
-      .update(roles)
-      .set({
-        usersCount: sql`COALESCE(${roles.usersCount}, 0) + 1`,
-      })
-      .where(eq(roles.id, id));
+    // Use transaction for atomic operation
+    await db.transaction(async (tx) => {
+      // Remove all existing role assignments for this user
+      if (existingRoles.length > 0) {
+        await tx.delete(userRoles).where(eq(userRoles.userId, validatedData.userId));
+        
+        // Decrement user count for old roles
+        for (const oldRole of existingRoles) {
+          if (oldRole.roleId) {
+            await tx
+              .update(roles)
+              .set({
+                usersCount: sql`GREATEST(COALESCE(${roles.usersCount}, 0) - 1, 0)`,
+              })
+              .where(eq(roles.id, oldRole.roleId));
+          }
+        }
+      }
+
+      // Assign new role
+      await tx.insert(userRoles).values({
+        userId: validatedData.userId,
+        roleId: id,
+        assignedAt: new Date(),
+      });
+
+      // Increment users count for new role
+      await tx
+        .update(roles)
+        .set({
+          usersCount: sql`COALESCE(${roles.usersCount}, 0) + 1`,
+        })
+        .where(eq(roles.id, id));
+    });
 
     return NextResponse.json({ message: 'Role assigned successfully' });
   } catch (error) {
@@ -100,10 +126,12 @@ export async function GET(
     const { id } = await params;
     
     // Get all users with their profile info (names, position) and employee dept
+    // Exclude admin users as they have full access by default
     const usersList = await db
       .select({
         id: users.id,
         email: users.email,
+        role: users.role,
         firstName: userProfiles.firstName,
         lastName: userProfiles.lastName,
         position: employees.position,
@@ -114,6 +142,10 @@ export async function GET(
       .leftJoin(employees, eq(users.id, employees.userId))
       .where(eq(users.isActive, true));
 
+    // Filter out admin users (they have full access by default)
+    const nonAdminUsers = usersList.filter((u: any) => u.role !== 'admin');
+
+    // Get assignments for this specific role
     const assignments = await db
       .select({ userId: userRoles.userId })
       .from(userRoles)
@@ -121,13 +153,28 @@ export async function GET(
 
     const assignedSet = new Set(assignments.map((a: any) => a.userId));
 
-    const result = usersList.map((u: any) => ({
+    // Get current role for ALL users (to show what role they have)
+    const allUserRoles = await db
+      .select({
+        userId: userRoles.userId,
+        roleId: userRoles.roleId,
+        roleName: roles.name,
+      })
+      .from(userRoles)
+      .innerJoin(roles, eq(userRoles.roleId, roles.id));
+
+    const userCurrentRole = new Map(
+      allUserRoles.map((ur: any) => [ur.userId, { id: ur.roleId, name: ur.roleName }])
+    );
+
+    const result = nonAdminUsers.map((u: any) => ({
       id: u.id,
       email: u.email,
       firstName: u.firstName || '',
       lastName: u.lastName || '',
       position: u.position || 'N/A',
       assigned: assignedSet.has(u.id),
+      currentRole: userCurrentRole.get(u.id) || null,
     }));
 
     return NextResponse.json({ success: true, users: result });

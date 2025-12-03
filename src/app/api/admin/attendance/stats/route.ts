@@ -13,9 +13,11 @@ export async function GET(req: NextRequest) {
     }
 
     const decoded = await verifyToken(token);
-    if (!decoded || !['admin', 'hr'].includes(decoded.role)) {
-      return NextResponse.json({ error: 'Admin/HR access required' }, { status: 403 });
+    if (!decoded) {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 403 });
     }
+    
+    const isAdmin = ['admin', 'hr'].includes(decoded.role);
 
     const today = new Date().toISOString().split('T')[0];
 

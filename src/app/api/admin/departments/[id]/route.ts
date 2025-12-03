@@ -115,14 +115,20 @@ export async function DELETE(
 
     const departmentId = id;
 
-    // Check if department exists and get employee count
+    // Check if department exists and get active employee count only
     const departmentWithEmployees = await db
       .select({
         department: departments,
         employeeCount: sql<number>`count(${employees.id})`,
       })
       .from(departments)
-      .leftJoin(employees, eq(employees.departmentId, departments.id))
+      .leftJoin(
+        employees, 
+        and(
+          eq(employees.departmentId, departments.id),
+          eq(employees.isActive, true)
+        )
+      )
       .where(eq(departments.id, departmentId))
       .groupBy(departments.id)
       .limit(1);

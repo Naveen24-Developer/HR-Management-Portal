@@ -13,6 +13,7 @@ import { eq, and, sql, inArray } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth/utils';
 import { matchesAllowedIP, extractClientIP, debugHeaders } from '@/lib/restrictions/ip-validator';
 import { isWithinGeoZone, parseCoordinate } from '@/lib/restrictions/geo-validator';
+import { calculateCheckInStatus } from '@/lib/utils/attendance-calculator';
 
 export async function POST(req: NextRequest) {
   debugHeaders(req);
@@ -242,10 +243,12 @@ if (ipRestrictionAssignments.length > 0) {
     // ===== ATTENDANCE CREATION =====
     console.log('All restrictions passed, creating attendance record...');
     
-    const [settings] = await db.select().from(attendanceSettings).limit(1);
-    if (!settings) {
+    const [settingsRaw] = await db.select().from(attendanceSettings).limit(1);
+    if (!settingsRaw) {
       return NextResponse.json({ error: 'Attendance settings not configured' }, { status: 500 });
     }
+
+    const settings = settingsRaw as any;
 
     // Check if already checked in today
     const [existingRecord] = await db
@@ -266,38 +269,30 @@ if (ipRestrictionAssignments.length > 0) {
       );
     }
 
-    // Calculate check-in status based on time windows
-    const [checkInStartHour, checkInStartMinute] = settings.checkInStart
-      .toString()
-      .split(':')
-      .map(Number);
-    const [checkInEndHour, checkInEndMinute] = settings.checkInEnd
-      .toString()
-      .split(':')
-      .map(Number);
+    // Calculate check-in status using new utility function
+    const checkInCalculation = calculateCheckInStatus(
+      checkInTime,
+      (settings.checkInStart || '08:00').toString(),
+      (settings.checkInEnd || '10:00').toString()
+    );
 
-    const checkInStartTotalMinutes = checkInStartHour * 60 + checkInStartMinute;
-    const checkInEndTotalMinutes = checkInEndHour * 60 + checkInEndMinute;
+    // Map calculation result to status field
+    // Status field stores the final attendance status (present/late/early/absent)
+    const status = checkInCalculation.status === 'early' ? 'early' : 
+                   checkInCalculation.status === 'late' ? 'late' : 
+                   'present';
 
-    const checkInHours = checkInTime.getHours();
-    const checkInMinutes = checkInTime.getMinutes();
-    const checkInTotalMinutes = checkInHours * 60 + checkInMinutes;
-
-    let status = 'present';
-    let lateMinutes = 0;
-
-    if (checkInTotalMinutes > checkInEndTotalMinutes) {
-      status = 'late';
-      lateMinutes = checkInTotalMinutes - checkInEndTotalMinutes;
-    } else if (checkInTotalMinutes < checkInStartTotalMinutes) {
-      status = 'early';
-    }
+    const lateMinutes = checkInCalculation.status === 'late' 
+      ? checkInCalculation.duration 
+      : 0;
 
     console.log('Check-in time analysis:', {
       checkInTime: checkInTime.toISOString(),
-      checkInWindow: `${settings.checkInStart} - ${settings.checkInEnd}`,
+      checkInWindow: `${settings.checkInStart || '08:00'} - ${settings.checkInEnd || '10:00'}`,
       status,
-      lateMinutes
+      checkInStatus: checkInCalculation.status,
+      duration: checkInCalculation.duration,
+      lateMinutes,
     });
 
     // Create attendance record
@@ -306,6 +301,8 @@ if (ipRestrictionAssignments.length > 0) {
       date: today,
       checkIn: checkInTime,
       status,
+      checkInStatus: checkInCalculation.status,
+      checkInDuration: checkInCalculation.duration,
       lateMinutes,
       workHours: '0',
       restrictionPassed,
@@ -336,6 +333,7 @@ if (ipRestrictionAssignments.length > 0) {
       success: true,
       message: 'Checked in successfully',
       attendance: resultRecord,
+      checkInStatus: checkInCalculation.status,
     });
 
   } catch (error) {

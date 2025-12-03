@@ -13,9 +13,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { LogOut, User as UserIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function UserNav() {
   const router = useRouter();
+  const { logout } = useAuth();
   
   // This is now hardcoded for the admin user as per the new login flow.
   // In a full Supabase implementation, you'd fetch the user session here.
@@ -26,11 +28,13 @@ export function UserNav() {
   }
 
   const handleLogout = async () => {
-    // In a full Supabase implementation, you would call signOut() from lib/auth
-    // For now, we'll clear the session cookie via an API route if needed,
-    // but a simple redirect will suffice for the hardcoded admin.
-    // For simplicity, we just navigate to login.
-    router.push('/login');
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Logout failed:', error);
+      // Fallback to direct redirect if logout fails
+      router.push('/login');
+    }
   };
   
   const getInitials = (firstName?: string, lastName?: string) => {

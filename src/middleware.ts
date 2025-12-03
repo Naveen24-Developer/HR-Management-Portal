@@ -3,38 +3,33 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 export async function middleware(request: NextRequest) {
-  const sessionCookie = request.cookies.get('hrms-session');
   const { pathname } = request.nextUrl;
 
-  const publicRoutes = ['/login', '/unauthorized'];
+  const publicRoutes = ['/login', '/register', '/unauthorized'];
   if (publicRoutes.includes(pathname)) {
     return NextResponse.next();
   }
 
-  // Redirect root to appropriate page
+  // Redirect root to dashboard (common for all roles)
   if (pathname === '/') {
-    if (sessionCookie?.value === 'admin-authenticated') {
-      return NextResponse.redirect(new URL('/admin/dashboard', request.url));
-    }
-    return NextResponse.redirect(new URL('/login', request.url));
-  }
-  
-  // For now, only admin dashboard is protected by this logic.
-  // Supabase handles auth for other roles on the client-side.
-  if (pathname.startsWith('/admin')) {
-    if (sessionCookie?.value !== 'admin-authenticated') {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
+    return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
+  // Redirect old /admin routes to /dashboard routes
+  if (pathname.startsWith('/admin')) {
+    const newPath = pathname.replace('/admin', '/dashboard');
+    return NextResponse.redirect(new URL(newPath, request.url));
+  }
+
+  // All other routes proceed normally
+  // Page-level and API-level protection should be performed via
+  // token verification and permissions checks
   return NextResponse.next();
 }
 
 export const config = {
   matcher: [
     '/admin/:path*',
-    '/hr/:path*',
-    '/employee/:path*',
     '/dashboard/:path*',
     '/',
     '/((?!api|_next/static|_next/image|favicon.ico|login|register|unauthorized).*)'

@@ -69,12 +69,9 @@ export function LoginForm() {
         } catch (e) {}
       }
 
-      if (data.user?.role === 'admin') {
-        router.push('/admin/dashboard');
-      } else {
-        // Redirect other roles appropriately
-        router.push('/dashboard'); 
-      }
+      // Always redirect to the common dashboard. Pages and menus are
+      // rendered dynamically based on the user's role/permissions.
+      router.push('/dashboard');
       router.refresh();
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred.');

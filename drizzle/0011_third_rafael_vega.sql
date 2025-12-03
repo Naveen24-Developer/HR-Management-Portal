@@ -1,0 +1,1 @@
+ALTER TABLE "attendance_settings" DROP COLUMN "enable_attendance_rules";

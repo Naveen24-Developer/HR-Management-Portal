@@ -9,21 +9,25 @@ const createRoleSchema = z.object({
   name: z.string().min(1, 'Role name is required'),
   description: z.string().optional(),
   permissions: z.record(z.record(z.boolean())),
+  sidebarPermissions: z.array(z.string()).optional().default([]),
+  pagePermissions: z.array(z.string()).optional().default([]),
 });
 
 // GET /api/admin/roles - Get all roles with user counts
 export async function GET(request: NextRequest) {
   try {
-    // Get roles with user counts using subquery
+    // Get roles with REAL-TIME user counts by joining with userRoles table
     const rolesWithCounts = await db
       .select({
         id: roles.id,
         name: roles.name,
         description: roles.description,
         permissions: roles.permissions,
+        sidebarPermissions: roles.sidebarPermissions,
+        pagePermissions: roles.pagePermissions,
         isDefault: roles.isDefault,
         isSystem: roles.isSystem,
-        usersCount: sql<number>`COALESCE(${roles.usersCount}, 0)`,
+        usersCount: roles.usersCount,
         createdAt: roles.createdAt,
         updatedAt: roles.updatedAt,
       })
@@ -51,6 +55,8 @@ export async function GET(request: NextRequest) {
           name: r.name,
           description: r.description,
           permissions,
+          sidebarPermissions: Array.isArray(r.sidebarPermissions) ? r.sidebarPermissions : [],
+          pagePermissions: Array.isArray(r.pagePermissions) ? r.pagePermissions : [],
           isDefault: r.isDefault,
           isSystem: r.isSystem,
           usersCount: r.usersCount ?? 0,
@@ -94,6 +100,8 @@ export async function POST(request: NextRequest) {
         name: validatedData.name,
         description: validatedData.description,
         permissions: validatedData.permissions,
+        sidebarPermissions: validatedData.sidebarPermissions,
+        pagePermissions: validatedData.pagePermissions,
         isDefault: false,
         isSystem: false,
         usersCount: 0,

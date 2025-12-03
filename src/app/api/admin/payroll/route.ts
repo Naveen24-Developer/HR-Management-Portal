@@ -3,17 +3,23 @@ import { db } from '@/lib/database/db';
 import { payroll, employees, users, userProfiles, departments } from '@/lib/database/schema';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth/utils';
+import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
+import { canPerformAction } from '@/lib/auth/permissions';
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decoded = verifyToken(token);
-    if (!decoded || decoded.role !== 'admin') {
+    if (!decoded) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Check for 'view' permission on payroll module
+    if (!canPerformAction(decoded.role, decoded.permissions, 'payroll', 'view')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -66,13 +72,18 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    const token = getTokenFromRequest(request);
     if (!token) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const decoded = verifyToken(token);
-    if (!decoded || decoded.role !== 'admin') {
+    if (!decoded) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Check for 'create' permission on payroll module
+    if (!canPerformAction(decoded.role, decoded.permissions, 'payroll', 'create')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

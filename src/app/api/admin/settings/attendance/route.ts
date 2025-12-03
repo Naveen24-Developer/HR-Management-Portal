@@ -12,24 +12,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const decoded = verifyToken(token);
-    // Allow dev fallback cookie for admin convenience
-    let finalDecoded = decoded;
-    if (!finalDecoded) {
-      const sessionCookie = req.cookies.get && req.cookies.get('hrms-session')?.value;
-      if (process.env.NODE_ENV !== 'production' && sessionCookie === 'admin-authenticated') {
-        finalDecoded = { id: '00000000-0000-0000-0000-000000000001', role: 'admin', email: 'admin@hrms.com' } as any;
-      }
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 403 });
     }
-
-    if (!finalDecoded) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
-
-    // Only admin may fetch attendance settings
-    if (finalDecoded.role !== 'admin') {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-    }
+    
+    // Allow all authenticated users to read settings (needed for check-in/check-out calculations)
+    // Only admins can modify settings (handled in PUT endpoint)
 
     // Get attendance settings (create default if missing)
     let [settings] = await db.select().from(attendanceSettings).limit(1);
@@ -63,16 +52,12 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const decoded = verifyToken(token);
-    let finalDecoded = decoded;
-    if (!finalDecoded) {
-      const sessionCookie = req.cookies.get && req.cookies.get('hrms-session')?.value;
-      if (process.env.NODE_ENV !== 'production' && sessionCookie === 'admin-authenticated') {
-        finalDecoded = { id: '00000000-0000-0000-0000-000000000001', role: 'admin', email: 'admin@hrms.com' } as any;
-      }
+    const decoded = await verifyToken(token);
+    if (!decoded) {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 403 });
     }
 
-    if (!finalDecoded || finalDecoded.role !== 'admin') {
+    if (decoded.role !== 'admin') {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
     }
 
@@ -102,7 +87,7 @@ export async function PUT(req: NextRequest) {
 
     // Determine updater id
     let updaterId: string | null = null;
-    const possibleId = (finalDecoded as any).userId ?? (finalDecoded as any).id;
+    const possibleId = decoded.userId ?? decoded.id;
     if (possibleId) {
       try {
         const [found] = await db.select().from(users).where(eq(users.id, possibleId)).limit(1);

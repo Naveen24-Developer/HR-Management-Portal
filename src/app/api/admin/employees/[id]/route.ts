@@ -1,7 +1,7 @@
 // app/api/admin/employees/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
-import { employees, users, userProfiles, userRoles } from '@/lib/database/schema';
+import { employees, users, userProfiles, userRoles, attendance, leaveRequests, payroll, projectTeam } from '@/lib/database/schema';
 import { eq, and } from 'drizzle-orm';
 
 async function verifyAuth(request: NextRequest) {
@@ -97,7 +97,6 @@ export async function PUT(
           firstName,
           lastName,
           phone: phone || null,
-          updatedAt: new Date(),
         })
         .where(eq(userProfiles.userId, existingUser.id));
 
@@ -110,7 +109,6 @@ export async function PUT(
           employmentType,
           salary: salary ? parseInt(salary) : employee.salary,
           joinDate,
-          updatedAt: new Date(),
         })
         .where(eq(employees.id, employeeId));
 
@@ -191,33 +189,61 @@ export async function DELETE(
       );
     }
 
-    // Deactivate employee (soft delete)
-    await db
-      .update(employees)
-      .set({
-        isActive: false,
-        status: 'inactive',
-        updatedAt: new Date(),
-      })
-      .where(eq(employees.id, employeeId));
-
-    // Also deactivate the user account
     const employee = existingEmployee[0];
-    await db
-      .update(users)
-      .set({
-        isActive: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, employee.userId));
+
+    // Ensure userId exists before proceeding
+    if (!employee.userId) {
+      return NextResponse.json(
+        { error: 'Employee user ID not found' },
+        { status: 500 }
+      );
+    }
+
+    const userId = employee.userId; // TypeScript now knows this is non-null
+
+    // Complete cleanup: Remove all related data in a transaction
+    await db.transaction(async (tx) => {
+      // 1. Remove role assignments
+      await tx.delete(userRoles).where(eq(userRoles.userId, userId));
+
+      // 2. Remove attendance records
+      await tx.delete(attendance).where(eq(attendance.employeeId, employeeId));
+
+      // 3. Remove leave requests
+      await tx.delete(leaveRequests).where(eq(leaveRequests.employeeId, employeeId));
+
+      // 4. Remove payroll records
+      await tx.delete(payroll).where(eq(payroll.employeeId, employeeId));
+
+      // 5. Remove project team assignments
+      await tx.delete(projectTeam).where(eq(projectTeam.employeeId, employeeId));
+
+      // 6. Deactivate employee record (soft delete)
+      await tx
+        .update(employees)
+        .set({
+          isActive: false,
+          status: 'inactive',
+        })
+        .where(eq(employees.id, employeeId));
+
+      // 7. Deactivate user account
+      await tx
+        .update(users)
+        .set({
+          isActive: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+    });
 
     return NextResponse.json({
-      message: 'Employee deactivated successfully',
+      message: 'Employee deleted successfully',
     });
   } catch (error) {
-    console.error('Failed to deactivate employee:', error);
+    console.error('Failed to delete employee:', error);
     return NextResponse.json(
-      { error: 'Failed to deactivate employee' },
+      { error: 'Failed to delete employee' },
       { status: 500 }
     );
   }

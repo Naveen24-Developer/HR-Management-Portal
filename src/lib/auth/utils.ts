@@ -47,7 +47,13 @@ export async function signOut() {
 
 export function generateToken(
   user: { id: string; role: string; email: string },
-  extras?: { roleId?: string; permissions?: Record<string, Record<string, boolean>> }
+  extras?: { 
+    roleId?: string; 
+    roleName?: string;
+    permissions?: Record<string, Record<string, boolean>>;
+    sidebarPermissions?: string[];
+    pagePermissions?: string[];
+  }
 ) {
   const payload: any = {
     id: user.id,
@@ -56,7 +62,10 @@ export function generateToken(
     userId: user.id,
   };
   if (extras?.roleId) payload.roleId = extras.roleId;
+  if (extras?.roleName) payload.roleName = extras.roleName;
   if (extras?.permissions) payload.permissions = extras.permissions;
+  if (extras?.sidebarPermissions) payload.sidebarPermissions = extras.sidebarPermissions;
+  if (extras?.pagePermissions) payload.pagePermissions = extras.pagePermissions;
   const secret = getJwtSecret();
   // Tokens are long-lived for interactive sessions; use 7 days.
   return jwt.sign(payload, secret, { expiresIn: '7d' });
@@ -74,7 +83,10 @@ export function verifyToken(token: string) {
       role: decodedRaw.role,
       email: decodedRaw.email,
       roleId: decodedRaw.roleId,
+      roleName: decodedRaw.roleName,
       permissions: decodedRaw.permissions,
+      sidebarPermissions: decodedRaw.sidebarPermissions,
+      pagePermissions: decodedRaw.pagePermissions,
       iat: decodedRaw.iat,
       exp: decodedRaw.exp,
     };
@@ -84,7 +96,10 @@ export function verifyToken(token: string) {
       role: string;
       email: string;
       roleId?: string;
+      roleName?: string;
       permissions?: Record<string, Record<string, boolean>>;
+      sidebarPermissions?: string[];
+      pagePermissions?: string[];
       iat: number;
       exp: number;
     };
@@ -97,4 +112,21 @@ export async function hashPassword(password: string) {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(password, salt);
   return hashedPassword;
+}
+
+/**
+ * Extract a token from a Next.js request.
+ * - Prefer `Authorization: Bearer <token>` header
+ * - Fall back to `auth-token` cookie when header is not present
+ */
+export function getTokenFromRequest(request: any): string | null {
+  try {
+    const headerToken = request.headers?.get && request.headers.get('authorization')?.replace('Bearer ', '');
+    if (headerToken) return headerToken;
+    const cookieToken = request.cookies?.get && request.cookies.get('auth-token')?.value;
+    if (cookieToken) return cookieToken;
+    return null;
+  } catch (e) {
+    return null;
+  }
 }

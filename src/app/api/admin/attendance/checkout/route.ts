@@ -4,6 +4,12 @@ import { db } from '@/lib/database/db';
 import { attendance, employees, attendanceSettings } from '@/lib/database/schema';
 import { eq, and } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth/utils';
+import { 
+  calculateCheckOutStatus, 
+  calculateWorkHours, 
+  calculateAttendanceStatus,
+  AttendanceSettings 
+} from '@/lib/utils/attendance-calculator';
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,10 +44,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Get attendance settings
-    const [settings] = await db.select().from(attendanceSettings).limit(1);
-    if (!settings) {
+    const [settingsRaw] = await db.select().from(attendanceSettings).limit(1);
+    if (!settingsRaw) {
       return NextResponse.json({ error: 'Attendance settings not configured' }, { status: 500 });
     }
+
+    const settings = settingsRaw as any;
 
     // Get today's attendance record
     const [todayRecord] = await db
@@ -76,53 +84,58 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Parse checkout settings times
-    const [checkOutStartHour, checkOutStartMinute] = settings.checkOutStart
-      .toString()
-      .split(':')
-      .map(Number);
-    const [checkOutEndHour, checkOutEndMinute] = settings.checkOutEnd
-      .toString()
-      .split(':')
-      .map(Number);
-
-    const checkOutStartTotalMinutes = checkOutStartHour * 60 + checkOutStartMinute;
-    const checkOutEndTotalMinutes = checkOutEndHour * 60 + checkOutEndMinute;
-
-    // Get actual check-out time in minutes
-    const checkOutHours = checkOutTime.getHours();
-    const checkOutMinutes = checkOutTime.getMinutes();
-    const checkOutTimeTotalMinutes = checkOutHours * 60 + checkOutMinutes;
+    // Calculate check-out status using utility function
+    const checkOutCalculation = calculateCheckOutStatus(
+      checkOutTime,
+      (settings.checkOutStart || '17:00').toString(),
+      (settings.checkOutEnd || '19:00').toString()
+    );
 
     // Calculate work hours
     const checkInTime = new Date(todayRecord.checkIn);
-    const workMilliseconds = checkOutTime.getTime() - checkInTime.getTime();
-    const workHours = workMilliseconds / (1000 * 60 * 60);
-    const requiredWorkHours = parseFloat(settings.workHours.toString());
+    const workHours = calculateWorkHours(checkInTime, checkOutTime);
 
-    // Determine status based on check-out time and work hours according to specifications
-    let finalStatus = todayRecord.status; // Keep existing check-in status (present/early/late)
-    let earlyCheckout = false;
-    let overtimeMinutes = 0;
+    // Calculate final attendance status based on both check-in and check-out
+    const attendanceSettingsObj: AttendanceSettings = {
+      checkInStart: (settings.checkInStart || '08:00').toString(),
+      checkInEnd: (settings.checkInEnd || '10:00').toString(),
+      checkOutStart: (settings.checkOutStart || '17:00').toString(),
+      checkOutEnd: (settings.checkOutEnd || '19:00').toString(),
+      workHours: parseFloat((settings.workHours || '8').toString()),
+    };
 
-    // Check-out Status Determination
-    // EARLY: Check-out before Check-out Start time
-    if (checkOutTimeTotalMinutes < checkOutStartTotalMinutes) {
-      earlyCheckout = true;
-    }
-    // OVER TIME: Check-out after Check-out End time
-    else if (checkOutTimeTotalMinutes > checkOutEndTotalMinutes) {
-      overtimeMinutes = Math.round(checkOutTimeTotalMinutes - checkOutEndTotalMinutes);
-    }
-    // ON TIME: Check-out within Check-out Start-End range (no special status)
+    const attendanceStatusCalculation = calculateAttendanceStatus(
+      checkInTime,
+      checkOutTime,
+      attendanceSettingsObj,
+      checkOutTime
+    );
 
-    // Update attendance record
+    // Extract values for storage
+    const earlyCheckout = checkOutCalculation.status === 'early';
+    const overtimeMinutes = checkOutCalculation.status === 'over_time' 
+      ? checkOutCalculation.duration 
+      : 0;
+
+    console.log('Check-out time analysis:', {
+      checkOutTime: checkOutTime.toISOString(),
+      checkOutWindow: `${settings.checkOutStart || '17:00'} - ${settings.checkOutEnd || '19:00'}`,
+      checkOutStatus: checkOutCalculation.status,
+      workHours,
+      attendanceStatus: attendanceStatusCalculation.attendanceStatus,
+      overtimeMinutes,
+      earlyCheckout,
+    });
+
+    // Update attendance record with final status
     const [updated] = await db
       .update(attendance)
       .set({
         checkOut: checkOutTime,
         workHours: workHours.toFixed(2),
-        status: finalStatus,
+        status: attendanceStatusCalculation.attendanceStatus,
+        checkOutStatus: checkOutCalculation.status,
+        checkOutDuration: checkOutCalculation.duration,
         earlyCheckout,
         overtimeMinutes,
         updatedAt: new Date(),
@@ -131,19 +144,14 @@ export async function POST(req: NextRequest) {
       .returning();
 
     const workHoursFormatted = workHours.toFixed(1);
-    let statusDetail = 'On Time';
-    
-    if (earlyCheckout) {
-      const earlyMinutes = checkOutStartTotalMinutes - checkOutTimeTotalMinutes;
-      statusDetail = `Early checkout by ${earlyMinutes} minutes`;
-    } else if (overtimeMinutes > 0) {
-      statusDetail = `Overtime by ${overtimeMinutes} minutes`;
-    }
+    let statusDetail = checkOutCalculation.description;
 
     return NextResponse.json({
       success: true,
       message: `Checked out successfully. Worked ${workHoursFormatted} hours (${statusDetail})`,
       attendance: updated,
+      checkOutStatus: checkOutCalculation.status,
+      attendanceStatus: attendanceStatusCalculation.attendanceStatus,
     });
   } catch (error) {
     console.error('Check-out error:', error);
