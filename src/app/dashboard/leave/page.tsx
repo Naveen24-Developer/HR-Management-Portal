@@ -1036,7 +1036,7 @@ export default function LeaveManagement() {
                         </button>
                       )}
                       
-                      {(userInfo?.role === 'admin' && (
+                      {(isAdmin && (
                         <button
                           onClick={() => handleDelete(request.id)}
                           className="text-red-600 hover:text-red-900 transition-colors"

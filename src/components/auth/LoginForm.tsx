@@ -1,4 +1,4 @@
-//src/components/auth/LoginForm.tsx
+// src/components/auth/LoginForm.tsx
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -106,7 +106,6 @@ export function LoginForm() {
                   <Input placeholder="Enter your email or username" {...field} />
                 </FormControl>
                 <FormMessage />
-                <p className="text-xs text-gray-500 mt-1">e.g., admin@company.com or Admin</p>
               </FormItem>
             )}
           />
