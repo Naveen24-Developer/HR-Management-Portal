@@ -131,11 +131,16 @@ export function Sidebar({ user, pathname, onClose, isMobile = false }: SidebarPr
 
   // Filter navigation items based on sidebar permissions from role
   const allowedItems = navigationItems.filter((item) => {
-    if (item.module === 'dashboard') return true; // Always show dashboard
-    if (!user) return true; // Show all items while loading (optimistic)
-    if (isAdmin) return true; // Admins see everything
+    // Always show dashboard to everyone
+    if (item.module === 'dashboard') return true;
     
-    // For non-admin users, check if the menu is in their role's sidebarPermissions
+    // If user not loaded yet, don't show other items (loading state)
+    if (!user) return false;
+    
+    // Admins see ALL menus regardless of sidebarPermissions
+    if (isAdmin) return true;
+    
+    // For non-admin users (employees), check if menu is in their role's sidebarPermissions
     const sidebarPermissions = user?.sidebarPermissions || [];
     return sidebarPermissions.includes(item.module);
   });

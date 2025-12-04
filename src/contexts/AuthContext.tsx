@@ -22,9 +22,15 @@ interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   logout: () => Promise<void>;
+  refetchUser: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, loading: true, logout: async () => {} });
+const AuthContext = createContext<AuthContextType>({ 
+  user: null, 
+  loading: true, 
+  logout: async () => {},
+  refetchUser: async () => {}
+});
 
 // Safe lazy import to handle Supabase client initialization errors
 let supabaseClient: any = null;
@@ -48,11 +54,81 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [initError, setInitError] = useState<string | null>(null);
   const router = useRouter();
 
+  // Function to fetch user data from API
+  const fetchUserData = async () => {
+    const tokenFromStorage = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    
+    if (!tokenFromStorage) {
+      console.log('AuthContext: No token found');
+      setUser(null);
+      return;
+    }
+
+    try {
+      console.log('AuthContext: Fetching user data from /api/auth/me...');
+      const headers: any = {
+        'Authorization': `Bearer ${tokenFromStorage}`
+      };
+
+      const meRes = await fetch('/api/auth/me', {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+      });
+
+      if (meRes.ok) {
+        const json = await meRes.json();
+        if (json?.user) {
+          const mergedUser = { 
+            ...json.user,
+            permissions: json.user.permissions,
+            sidebarPermissions: json.user.sidebarPermissions,
+            pagePermissions: json.user.pagePermissions
+          };
+          console.log('✅ AuthContext - User loaded successfully:', {
+            role: mergedUser.role,
+            email: mergedUser.email,
+            sidebarPermissions: mergedUser.sidebarPermissions,
+          });
+          setUser(mergedUser);
+        }
+      } else {
+        console.warn('⚠️ /api/auth/me returned non-OK status:', meRes.status);
+        if (meRes.status === 401 && typeof window !== 'undefined') {
+          localStorage.removeItem('auth-token');
+          setUser(null);
+        }
+      }
+    } catch (e) {
+      console.error('❌ Failed to fetch /api/auth/me:', e);
+    }
+  };
+
+  // Expose refetch function
+  const refetchUser = async () => {
+    console.log('🔄 Refetching user data...');
+    await fetchUserData();
+  };
+
   useEffect(() => {
     let isMounted = true;
+    let subscription: any = null;
 
     const initAuth = async () => {
       try {
+        // Skip auth initialization on public routes
+        const isPublicRoute = typeof window !== 'undefined' && 
+          (window.location.pathname === '/login' || 
+           window.location.pathname === '/register' ||
+           window.location.pathname === '/unauthorized');
+        
+        if (isPublicRoute) {
+          console.log('AuthContext: Public route detected, skipping auth init');
+          if (isMounted) setLoading(false);
+          return;
+        }
+
+        console.log('AuthContext: Initializing auth...');
         const supabase = await getSupabaseClient();
         
         if (!supabase) {
@@ -77,52 +153,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           }
         }
 
-        const { data: { subscription }, error: listenerError } = supabase.auth.onAuthStateChange((_event: string, session: any) => {
+        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange((_event: string, session: any) => {
           if (isMounted) {
             setUser((prev) => ({ ...(prev ?? {}), ...(session?.user ?? {}) }));
           }
         });
+        subscription = sub;
 
-        // After supabase init, try to get application-level user info (role, permissions)
-        // Prefer server cookie `auth-token`, otherwise use token from localStorage.
-        try {
-          const tokenFromStorage = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-          const headers: any = {};
-          if (tokenFromStorage) headers['Authorization'] = `Bearer ${tokenFromStorage}`;
-
-          const meRes = await fetch('/api/auth/me', {
-            method: 'GET',
-            headers,
-            credentials: 'include',
-          });
-
-          if (meRes.ok) {
-            const json = await meRes.json();
-            if (json?.user && isMounted) {
-              // merge permissions if also stored in localStorage
-              let perms = json.user.permissions ?? null;
-              try {
-                const storedPerms = typeof window !== 'undefined' ? localStorage.getItem('auth-permissions') : null;
-                if (storedPerms && !perms) {
-                  perms = JSON.parse(storedPerms);
-                }
-              } catch (e) {
-                // ignore
-              }
-              const mergedUser = { ...json.user, permissions: perms };
-              setUser(mergedUser);
-            }
-          }
-        } catch (e) {
-          // ignore me fetch errors; app can still function using supabase session info
-          console.warn('Failed to fetch /api/auth/me:', e);
-        } finally {
-          if (isMounted) setLoading(false);
-        }
-
-        return () => {
-          subscription?.unsubscribe();
-        };
+        // Fetch user data using the shared function
+        await fetchUserData();
+        
+        if (isMounted) setLoading(false);
       } catch (error) {
         console.error('Error initializing auth:', error);
         if (isMounted) {
@@ -136,52 +177,91 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     return () => {
       isMounted = false;
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, []);
+
+  // Listen for storage events (when token is added from login)
+  useEffect(() => {
+    const handleStorageChange = async (e: StorageEvent) => {
+      if (e.key === 'auth-token' && e.newValue) {
+        console.log('🔑 Auth token detected in storage, fetching user data...');
+        await fetchUserData();
+      }
+    };
+
+    // Also listen for custom event from same window (same-tab login)
+    const handleLoginEvent = async () => {
+      console.log('🔑 Login event detected, fetching user data...');
+      await fetchUserData();
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageChange);
+      window.addEventListener('user-logged-in', handleLoginEvent);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('storage', handleStorageChange);
+        window.removeEventListener('user-logged-in', handleLoginEvent);
+      }
     };
   }, []);
 
   const logout = async () => {
+    console.log('🔴 Logout started...');
+    
+    // Step 1: Clear user state immediately
+    setUser(null);
+    console.log('✅ User state cleared');
+    
+    // Step 2: Clear all storage
     try {
-      // Call server logout to clear any server-side cookies
+      if (typeof window !== 'undefined') {
+        localStorage.clear();
+        sessionStorage.clear();
+        console.log('✅ Storage cleared');
+      }
+    } catch (e) {
+      console.error('❌ Storage clear error:', e);
+    }
+
+    // Step 3: Call logout API to clear cookies
+    try {
       await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include',
-      }).catch(e => console.log('Logout fetch error (non-blocking):', e));
+      });
+      console.log('✅ Logout API called');
     } catch (e) {
-      // ignore
+      console.log('⚠️ Logout API error:', e);
     }
 
+    // Step 4: Sign out from Supabase
     try {
       const supabase = await getSupabaseClient();
       if (supabase) {
         await supabase.auth.signOut();
+        console.log('✅ Supabase signed out');
       }
     } catch (e) {
-      console.error('Supabase sign out error:', e);
-    }
-
-    try {
-      localStorage.removeItem('auth-token');
-      localStorage.removeItem('auth-permissions');
-    } catch (e) {
-      // ignore
+      console.log('⚠️ Supabase error:', e);
     }
     
-    // Clear user state
-    setUser(null);
-
-    // Navigate to login page - using push with window.location as fallback
-    try {
-      await router.push('/login');
-    } catch (e) {
-      console.error('Router navigation error, using window.location:', e);
-      window.location.href = '/login';
+    // Step 5: Redirect to login - use replace for hard navigation
+    console.log('🔄 Redirecting to login...');
+    if (typeof window !== 'undefined') {
+      window.location.replace('/login');
     }
   };
 
   // If there's an init error but app still needs to load, render children
   // User will see app but auth won't work until they reload or Supabase is available
   return (
-    <AuthContext.Provider value={{ user, loading, logout }}>
+    <AuthContext.Provider value={{ user, loading, logout, refetchUser }}>
       {children}
       {initError && process.env.NODE_ENV === 'development' && (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#fef08a', padding: '1rem', fontSize: '0.875rem', zIndex: 9999 }}>

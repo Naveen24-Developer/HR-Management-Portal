@@ -270,7 +270,7 @@ export default function SystemSettings() {
     { id: 'leave', name: 'Leave', icon: CalendarIcon },
     { id: 'payroll', name: 'Payroll', icon: DocumentTextIcon },
     { id: 'notifications', name: 'Notifications', icon: BellIcon },
-    { id: 'security', name: 'Security', icon: ShieldCheckIcon },
+    { id: 'security', name: 'Restricitions', icon: ShieldCheckIcon },
     { id: 'holidays', name: 'Holidays', icon: CalendarIcon },
   ];
 

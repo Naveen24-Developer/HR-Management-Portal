@@ -57,6 +57,8 @@ export function LoginForm() {
       if (data.token) {
         try {
           localStorage.setItem('auth-token', data.token);
+          // Dispatch custom event to trigger AuthContext to fetch user data
+          window.dispatchEvent(new Event('user-logged-in'));
         } catch (e) {
           // ignore
         }
@@ -68,6 +70,9 @@ export function LoginForm() {
           localStorage.setItem('auth-permissions', JSON.stringify(data.user.permissions));
         } catch (e) {}
       }
+
+      // Small delay to allow AuthContext to fetch user data before navigation
+      await new Promise(resolve => setTimeout(resolve, 300));
 
       // Always redirect to the common dashboard. Pages and menus are
       // rendered dynamically based on the user's role/permissions.
