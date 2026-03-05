@@ -12,6 +12,8 @@ import {
   CheckCircleIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasPermission } from '@/lib/auth/permissions';
 
 interface Department {
   id: string;
@@ -42,6 +44,14 @@ export default function DepartmentsPage() {
     name: '',
     description: '',
   });
+
+  const { user } = useAuth();
+    
+    // Check permissions for each action
+    const canViewDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'view');
+    const canCreateDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'create');
+    const canEditDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'edit');
+    const canDeleteDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'delete');
 
   useEffect(() => {
     fetchDepartments();
@@ -208,6 +218,8 @@ export default function DepartmentsPage() {
             Manage organizational departments and structure
           </p>
         </div>
+
+        {canCreateDepartment && (
         <button
           onClick={() => {
             setEditingDepartment(null);
@@ -219,6 +231,7 @@ export default function DepartmentsPage() {
           <PlusIcon className="w-5 h-5 mr-2" />
           Add Department
         </button>
+        )}
       </div>
 
       {/* Stats Cards */}
@@ -331,6 +344,7 @@ export default function DepartmentsPage() {
               
 
               <div className="flex space-x-2 pt-4 border-t border-gray-200">
+                {canViewDepartment && (
                 <button
                   onClick={() => handleView(dept)}
                   className="flex-1 flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
@@ -338,6 +352,8 @@ export default function DepartmentsPage() {
                   <EyeIcon className="w-4 h-4 mr-1" />
                   View
                 </button>
+                )}
+                {canEditDepartment && (
                 <button
                   onClick={() => handleEdit(dept)}
                   className="flex-1 flex items-center justify-center px-3 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-md hover:bg-indigo-100"
@@ -345,6 +361,8 @@ export default function DepartmentsPage() {
                   <PencilIcon className="w-4 h-4 mr-1" />
                   Edit
                 </button>
+                )}
+                {canDeleteDepartment && (
                 <button
                   onClick={() => handleDelete(dept.id, dept.employeeCount)}
                   disabled={dept.employeeCount > 0}
@@ -357,6 +375,7 @@ export default function DepartmentsPage() {
                 >
                   <TrashIcon className="w-4 h-4" />
                 </button>
+                )}
               </div>
             </div>
           </div>

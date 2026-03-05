@@ -1,7 +1,7 @@
 // app/api/admin/settings/attendance/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
-import { attendanceSettings, users } from '@/lib/database/schema';
+import { attendanceSettings, users, systemSettings } from '@/lib/database/schema';
 import { eq } from 'drizzle-orm';
 import { verifyToken } from '@/lib/auth';
 
@@ -20,7 +20,30 @@ export async function GET(req: NextRequest) {
     // Allow all authenticated users to read settings (needed for check-in/check-out calculations)
     // Only admins can modify settings (handled in PUT endpoint)
 
-    // Get attendance settings (create default if missing)
+    // First try to get from systemSettings (primary source - synced from admin settings page)
+    let [systemSetting] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.category, 'attendance'))
+      .limit(1);
+
+    // If found in systemSettings, use that data
+    if (systemSetting && systemSetting.settings) {
+      const settings = systemSetting.settings as any;
+      return NextResponse.json({ 
+        settings: {
+          workHours: settings.workHours || '8.0',
+          overtimeRate: settings.overtimeRate || '1.5',
+          autoCheckout: settings.autoCheckout !== false,
+          checkInStart: settings.checkInStart || '08:00',
+          checkInEnd: settings.checkInEnd || '10:00',
+          checkOutStart: settings.checkOutStart || '17:00',
+          checkOutEnd: settings.checkOutEnd || '19:00',
+        }
+      });
+    }
+
+    // Fallback to dedicated attendanceSettings table if systemSettings not available
     let [settings] = await db.select().from(attendanceSettings).limit(1);
 
     if (!settings) {
@@ -38,7 +61,17 @@ export async function GET(req: NextRequest) {
         .returning();
     }
 
-    return NextResponse.json({ settings });
+    return NextResponse.json({ 
+      settings: {
+        workHours: settings.workHours || '8.0',
+        overtimeRate: settings.overtimeRate || '1.5',
+        autoCheckout: settings.autoCheckout !== false,
+        checkInStart: settings.checkInStart || '08:00',
+        checkInEnd: settings.checkInEnd || '10:00',
+        checkOutStart: settings.checkOutStart || '17:00',
+        checkOutEnd: settings.checkOutEnd || '19:00',
+      }
+    });
   } catch (error) {
     console.error('Get attendance settings error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

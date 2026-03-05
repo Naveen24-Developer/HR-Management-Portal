@@ -1,7 +1,7 @@
 // app/api/admin/settings/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/database/db';
-import { systemSettings, users } from '@/lib/database/schema';
+import { systemSettings, users, attendanceSettings } from '@/lib/database/schema';
 import { eq } from 'drizzle-orm';
 import { verifyToken, getTokenFromRequest } from '@/lib/auth/utils';
 

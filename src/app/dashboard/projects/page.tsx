@@ -23,8 +23,8 @@ interface Project {
   managerName: string;
   startDate: string;
   endDate: string;
-  status: 'active' | 'completed' | 'on_hold' | 'cancelled';
-  priority: 'high' | 'medium' | 'low';
+  status: string;
+  priority: string;
   budget: number;
   progress: number;
   teamMembers: number;

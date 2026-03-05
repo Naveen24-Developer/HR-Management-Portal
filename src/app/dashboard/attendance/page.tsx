@@ -21,6 +21,8 @@ import {
   formatDuration,
   AttendanceSettings as AttendanceSettingsType,
 } from '@/lib/utils/attendance-calculator';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasPermission } from '@/lib/auth/permissions';
 
 interface AttendanceRecord {
   id: string;
@@ -112,6 +114,14 @@ export default function AttendanceManagement() {
     notes: '',
   });
   const [departments, setDepartments] = useState<string[]>([]);
+  const { user } = useAuth();
+    
+    // Check permissions for each action
+    
+    const canCreateAttendance = user?.role === 'admin' || hasPermission(user?.permissions, 'attendance', 'create');
+    const canEditAttendance = user?.role === 'admin' || hasPermission(user?.permissions, 'attendance', 'edit');
+    const canDeleteAttendance = user?.role === 'admin' || hasPermission(user?.permissions, 'attendance', 'delete');
+    const canExportAttendance = user?.role === 'admin' || hasPermission(user?.permissions, 'attendance', 'export');
 
   useEffect(() => {
     fetchAttendance();
@@ -486,12 +496,14 @@ export default function AttendanceManagement() {
           >
             Monthly Report
           </button>
+          {canExportAttendance && (
           <button
             onClick={exportAttendance}
             className="px-4 py-2 text-sm font-medium text-green-600 bg-green-50 rounded-md hover:bg-green-100"
           >
             Export Excel
           </button>
+          )}
         </div>
       </div>
 
@@ -591,6 +603,7 @@ export default function AttendanceManagement() {
             <option value="late">Late</option>
             <option value="half_day">Half Day</option>
           </select>
+          {canCreateAttendance && (
           <button
             onClick={() => setShowManualEntryModal(true)}
             className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 flex items-center"
@@ -598,6 +611,7 @@ export default function AttendanceManagement() {
             <PencilIcon className="w-4 h-4 mr-2" />
             Manual Entry
           </button>
+          )}
         </div>
       </div>
 
@@ -743,6 +757,7 @@ export default function AttendanceManagement() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex space-x-2">
+                        {canEditAttendance && (
                         <button
                           onClick={() => handleEditRecord(record)}
                           className="text-indigo-600 hover:text-indigo-900 flex items-center"
@@ -750,6 +765,8 @@ export default function AttendanceManagement() {
                         >
                           <PencilIcon className="w-4 h-4" />
                         </button>
+                        )}
+                        {canDeleteAttendance && (
                         <button
                           onClick={() => handleDeleteRecord(record.id)}
                           className="text-red-600 hover:text-red-900 flex items-center"
@@ -757,6 +774,7 @@ export default function AttendanceManagement() {
                         >
                           <TrashIcon className="w-4 h-4" />
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>

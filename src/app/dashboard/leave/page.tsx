@@ -109,6 +109,11 @@ interface Pagination {
   totalPages: number;
 }
 
+interface DateRange {
+  startDate: string;
+  endDate: string;
+}
+
 export default function LeaveManagement() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [stats, setStats] = useState<LeaveStats>({
@@ -132,7 +137,7 @@ export default function LeaveManagement() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+  const [dateRange, setDateRange] = useState<DateRange>({ startDate: '', endDate: '' });
   const [employeeFilter, setEmployeeFilter] = useState('');
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -192,7 +197,7 @@ export default function LeaveManagement() {
     fetchLeaveRequests();
     fetchLeaveStats();
     fetchUserInfo();
-  }, [pagination.page, statusFilter, typeFilter, dateFilter, employeeFilter]);
+  }, [pagination.page, statusFilter, typeFilter, dateRange.startDate, dateRange.endDate, employeeFilter]);
 
   useEffect(() => {
     if (userInfo) {
@@ -213,7 +218,8 @@ export default function LeaveManagement() {
         limit: pagination.limit.toString(),
         ...(statusFilter && { status: statusFilter }),
         ...(typeFilter && { type: typeFilter }),
-        ...(dateFilter && { date: dateFilter }),
+        ...(dateRange.startDate && { startDate: dateRange.startDate }),
+        ...(dateRange.endDate && { endDate: dateRange.endDate }),
         ...(employeeFilter && { employeeId: employeeFilter }),
       });
 
@@ -650,6 +656,29 @@ export default function LeaveManagement() {
     return days;
   };
 
+  const handleDateRangeChange = (type: 'startDate' | 'endDate', value: string) => {
+    const newDateRange = { ...dateRange, [type]: value };
+    
+    // Validate that end date is not before start date
+    if (type === 'startDate' && newDateRange.endDate && value > newDateRange.endDate) {
+      alert('Start date cannot be after end date');
+      return;
+    }
+    
+    if (type === 'endDate' && newDateRange.startDate && value < newDateRange.startDate) {
+      alert('End date cannot be before start date');
+      return;
+    }
+    
+    setDateRange(newDateRange);
+    setPagination({ ...pagination, page: 1 });
+  };
+
+  const clearDateRange = () => {
+    setDateRange({ startDate: '', endDate: '' });
+    setPagination({ ...pagination, page: 1 });
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'approved':
@@ -693,12 +722,28 @@ export default function LeaveManagement() {
     }
   };
 
-  const filteredRequests = leaveRequests.filter(request =>
-    request.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    request.lastName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    request.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    request.departmentName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredRequests = leaveRequests.filter(request => {
+    // Search filter
+    const searchMatch = 
+      request.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      request.lastName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      request.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      request.departmentName.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    // Date range filter - client-side filtering for better UX
+    let dateMatch = true;
+    if (dateRange.startDate && dateRange.endDate) {
+      const requestStartDate = new Date(request.startDate);
+      const requestEndDate = new Date(request.endDate);
+      const filterStartDate = new Date(dateRange.startDate);
+      const filterEndDate = new Date(dateRange.endDate);
+      
+      // Check if the leave request overlaps with the selected date range
+      dateMatch = requestStartDate <= filterEndDate && requestEndDate >= filterStartDate;
+    }
+    
+    return searchMatch && dateMatch;
+  });
 
   if (loading && leaveRequests.length === 0) {
     return (
@@ -879,16 +924,24 @@ export default function LeaveManagement() {
             </select>
           )}
           
+          {/* Date Range Filter */}
           <div className="flex items-center space-x-2">
             <CalendarIcon className="w-5 h-5 text-gray-400" />
             <input
-              type="month"
-              value={dateFilter}
-              onChange={(e) => {
-                setDateFilter(e.target.value);
-                setPagination({ ...pagination, page: 1 });
-              }}
+              type="date"
+              value={dateRange.startDate}
+              onChange={(e) => handleDateRangeChange('startDate', e.target.value)}
               className="px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="Start Date"
+            />
+            <span className="text-gray-500">to</span>
+            <input
+              type="date"
+              value={dateRange.endDate}
+              onChange={(e) => handleDateRangeChange('endDate', e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="End Date"
+              min={dateRange.startDate}
             />
           </div>
           
@@ -897,7 +950,7 @@ export default function LeaveManagement() {
               setSearchQuery('');
               setStatusFilter('');
               setTypeFilter('');
-              setDateFilter('');
+              clearDateRange();
               setEmployeeFilter('');
               setPagination({ ...pagination, page: 1 });
             }}
@@ -906,6 +959,23 @@ export default function LeaveManagement() {
             Clear Filters
           </button>
         </div>
+        
+        {/* Active Filters Display */}
+        {(dateRange.startDate || dateRange.endDate) && (
+          <div className="mt-2 flex items-center space-x-2">
+            <span className="text-sm text-gray-600">Active Date Range:</span>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+              {dateRange.startDate ? new Date(dateRange.startDate).toLocaleDateString() : 'Any'} to{' '}
+              {dateRange.endDate ? new Date(dateRange.endDate).toLocaleDateString() : 'Any'}
+            </span>
+            <button
+              onClick={clearDateRange}
+              className="text-xs text-red-600 hover:text-red-800"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Leave Requests Table */}
@@ -1060,12 +1130,12 @@ export default function LeaveManagement() {
               No leave requests found
             </h3>
             <p className="text-gray-600">
-              {searchQuery || statusFilter || typeFilter || dateFilter || employeeFilter
+              {searchQuery || statusFilter || typeFilter || dateRange.startDate || dateRange.endDate || employeeFilter
                 ? 'Try adjusting your search criteria'
                 : canCreate ? 'Submit your first leave request' : 'No leave requests available'
               }
             </p>
-            {canCreate && !searchQuery && !statusFilter && !typeFilter && !dateFilter && !employeeFilter && (
+            {canCreate && !searchQuery && !statusFilter && !typeFilter && !dateRange.startDate && !dateRange.endDate && !employeeFilter && (
               <button
                 onClick={() => setShowCreateModal(true)}
                 className="mt-4 inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
@@ -1856,24 +1926,6 @@ export default function LeaveManagement() {
                   </div>
                 </div>
               )}
-
-              {/* Action Buttons */}
-              {/* {(isAdmin && selectedRequest.status === 'pending' && (
-                <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200">
-                  <button
-                    onClick={() => handleReject(selectedRequest.id)}
-                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    onClick={() => handleApprove(selectedRequest.id)}
-                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700"
-                  >
-                    Approve
-                  </button>
-                </div>
-              ))} */}
 
               <div className="flex justify-end">
                 <button

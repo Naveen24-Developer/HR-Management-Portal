@@ -192,13 +192,12 @@ export default function SystemSettings() {
       if (response.ok) {
         alert('Settings saved successfully');
         
-        // Broadcast settings update so dashboard can refresh
-        // This triggers a storage event that other tabs/windows can listen to
+        // Dispatch a custom event for same-window listeners
+        window.dispatchEvent(new CustomEvent('settings-updated', { detail: { category: 'attendance' } }));
+        
+        // Also save to localStorage for cross-tab/window communication
         const eventData = { timestamp: Date.now(), category: 'attendance' };
         localStorage.setItem('settings-updated', JSON.stringify(eventData));
-        
-        // Also dispatch a custom event for same-window listeners
-        window.dispatchEvent(new CustomEvent('settings-updated', { detail: { category: 'attendance' } }));
       } else {
         const error = await response.json();
         alert(error.error || 'Failed to save settings');

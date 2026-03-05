@@ -11,6 +11,8 @@ import {
   FunnelIcon,
 } from '@heroicons/react/24/outline';
 import { PermissionGuard } from '@/components/auth/PermissionGuard';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasPermission } from '@/lib/auth/permissions';
 
 interface Employee {
   id: string;
@@ -43,6 +45,15 @@ export default function EmployeeManagement() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [viewEmployee, setViewEmployee] = useState<Employee | null>(null);
+  
+  // Get user and permissions from auth context
+  const { user } = useAuth();
+  
+  // Check permissions for each action
+  const canViewEmployees = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'view');
+  const canCreateEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'create');
+  const canEditEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'edit');
+  const canDeleteEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'delete');
 
   useEffect(() => {
     fetchEmployees();
@@ -167,13 +178,15 @@ export default function EmployeeManagement() {
             Manage all employees in your organization
           </p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
-        >
-          <PlusIcon className="w-5 h-5 mr-2" />
-          Add Employee
-        </button>
+        {canCreateEmployee && (
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
+          >
+            <PlusIcon className="w-5 h-5 mr-2" />
+            Add Employee
+          </button>
+        )}
       </div>
 
       {/* Stats Cards */}
@@ -368,20 +381,24 @@ export default function EmployeeManagement() {
                       >
                         <EyeIcon className="w-5 h-5" />
                       </button>
-                      <button
-                        onClick={() => setSelectedEmployee(employee)}
-                        className="text-indigo-600 hover:text-indigo-900 transition-colors"
-                        title="Edit Employee"
-                      >
-                        <PencilIcon className="w-5 h-5" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(employee.id)}
-                        className="text-red-600 hover:text-red-900 transition-colors"
-                        title="Deactivate Employee"
-                      >
-                        <TrashIcon className="w-5 h-5" />
-                      </button>
+                      {canEditEmployee && (
+                        <button
+                          onClick={() => setSelectedEmployee(employee)}
+                          className="text-indigo-600 hover:text-indigo-900 transition-colors"
+                          title="Edit Employee"
+                        >
+                          <PencilIcon className="w-5 h-5" />
+                        </button>
+                      )}
+                      {canDeleteEmployee && (
+                        <button
+                          onClick={() => handleDelete(employee.id)}
+                          className="text-red-600 hover:text-red-900 transition-colors"
+                          title="Deactivate Employee"
+                        >
+                          <TrashIcon className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -402,7 +419,7 @@ export default function EmployeeManagement() {
                 : 'Get started by adding your first employee'
               }
             </p>
-            {!searchQuery && !selectedDepartment && !selectedStatus && (
+            {!searchQuery && !selectedDepartment && !selectedStatus && canCreateEmployee && (
               <button
                 onClick={() => setShowAddModal(true)}
                 className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"

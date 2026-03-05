@@ -18,7 +18,6 @@ import {
 } from '@heroicons/react/24/outline';
 import CheckInDialog from '@/components/attendance/CheckInDialog';
 import { formatErrorAlert } from '@/lib/utils/attendance-errors';
-import { User } from 'lucide-react';
 
 interface DashboardStats {
   totalEmployees: number;
@@ -54,7 +53,7 @@ interface DashboardStats {
     checkInTime: string | null;
     checkOutTime: string | null;
     workHours: number;
-    status: 'present' | 'absent' | 'late' | 'half_day' | 'not_checked_in';
+    status: 'present' | 'absent' | 'late' | 'half day' | 'not checked in';
     lateMinutes: number;
     earlyCheckout: boolean;
     currentWorkHours: number;
@@ -114,13 +113,13 @@ export default function AdminDashboard() {
       checkInTime: null,
       checkOutTime: null,
       workHours: 0,
-      status: 'not_checked_in',
+      status: 'not checked in',
       lateMinutes: 0,
       earlyCheckout: false,
       currentWorkHours: 0,
     },
     attendanceSettings: {
-      workHours: 8,
+      workHours: 8.0,
       checkInStart: '08:00',
       checkInEnd: '10:00',
       checkOutStart: '17:00',
@@ -137,6 +136,7 @@ export default function AdminDashboard() {
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [checkInDialogOpen, setCheckInDialogOpen] = useState(false);
   const [requiresGeo, setRequiresGeo] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Update current time every minute
   useEffect(() => {
@@ -151,23 +151,64 @@ export default function AdminDashboard() {
     const handleSettingsUpdate = (event: Event) => {
       const customEvent = event as CustomEvent;
       if (customEvent.detail?.category === 'attendance') {
+        console.log('Settings updated event received, refetching attendance settings...');
         fetchAttendanceSettings();
       }
     };
 
     window.addEventListener('settings-updated', handleSettingsUpdate);
+    
+    // Also listen for localStorage changes from other tabs/windows
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'settings-updated') {
+        try {
+          const data = JSON.parse(event.newValue || '{}');
+          if (data.category === 'attendance') {
+            console.log('Settings updated in another tab, refetching attendance settings...');
+            fetchAttendanceSettings();
+          }
+        } catch (e) {
+          console.error('Failed to parse settings update event:', e);
+        }
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    
     return () => {
       window.removeEventListener('settings-updated', handleSettingsUpdate);
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
   useEffect(() => {
-    fetchCurrentUser();
-    fetchDashboardStats();
-    fetchCurrentAttendance();
-    fetchAttendanceSettings();
-    fetchAttendanceRecords();
-    checkEmployeeRestrictions();
+    let mounted = true;
+    
+    const loadData = async () => {
+      if (!mounted) return;
+      
+      try {
+        await Promise.all([
+          fetchCurrentUser(),
+          fetchDashboardStats(),
+          fetchCurrentAttendance(),
+          fetchAttendanceSettings(),
+          fetchAttendanceRecords(),
+          checkEmployeeRestrictions()
+        ]);
+      } catch (err) {
+        if (mounted) {
+          console.error('Error loading dashboard data:', err);
+          setError('Failed to load dashboard data');
+        }
+      }
+    };
+    
+    loadData();
+    
+    return () => {
+      mounted = false;
+    };
   }, [timeRange]);
 
   const checkEmployeeRestrictions = async () => {
@@ -191,7 +232,7 @@ export default function AdminDashboard() {
   const fetchCurrentUser = async () => {
     try {
       const token = localStorage.getItem('auth-token');
-      const response = await fetch('/api/auth/me', {
+      const response = await fetch('/api/authe/me', {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -259,9 +300,20 @@ export default function AdminDashboard() {
       
       if (response.ok) {
         const data = await response.json();
+        // Map the API response to the dashboard settings format
+        const attendanceSettings = {
+          workHours: parseFloat(data.settings.workHours) || 8,
+          overtimeRate: parseFloat(data.settings.overtimeRate) || 1.5,
+          autoCheckout: data.settings.autoCheckout !== false,
+          checkInStart: data.settings.checkInStart || '08:00',
+          checkInEnd: data.settings.checkInEnd || '10:00',
+          checkOutStart: data.settings.checkOutStart || '17:00',
+          checkOutEnd: data.settings.checkOutEnd || '19:00',
+        };
+        
         setStats(prev => ({ 
           ...prev, 
-          attendanceSettings: data.settings 
+          attendanceSettings
         }));
       }
     } catch (error) {
@@ -291,6 +343,10 @@ export default function AdminDashboard() {
   };
 
   const calculateCheckInStatus = (checkInTime: Date) => {
+    if (!checkInTime || !stats.attendanceSettings) {
+      return { status: 'present' as const, lateMinutes: 0, earlyMinutes: 0 };
+    }
+
     const checkInHours = checkInTime.getHours();
     const checkInMinutes = checkInTime.getMinutes();
 
@@ -303,7 +359,7 @@ export default function AdminDashboard() {
     // EARLY: Check-in before Check-in Start time
     if (checkInTotalMinutes < checkInStartTotalMinutes) {
       const earlyMinutes = checkInStartTotalMinutes - checkInTotalMinutes;
-      return { status: 'early' as const, lateMinutes: earlyMinutes, earlyMinutes };
+      return { status: 'present' as const, lateMinutes: 0, earlyMinutes };
     }
 
     // LATE: Check-in after Check-in End time
@@ -317,6 +373,10 @@ export default function AdminDashboard() {
   };
 
   const calculateCheckOutStatus = (checkInTime: Date, checkOutTime: Date) => {
+    if (!checkInTime || !checkOutTime || !stats.attendanceSettings) {
+      return { status: 'present' as const, earlyCheckout: false, earlyMinutes: 0, overtimeMinutes: 0 };
+    }
+
     const workHours = (checkOutTime.getTime() - checkInTime.getTime()) / (1000 * 60 * 60);
     const requiredWorkHours = stats.attendanceSettings.workHours;
 
@@ -468,15 +528,19 @@ export default function AdminDashboard() {
         const error = await response.json();
         alert(error.error || 'Failed to check out');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to check out:', error);
-      alert('Failed to check out');
+      const errorMessage = error?.response?.data?.error || error?.message || 'Failed to check out';
+      setError(errorMessage);
+      alert(errorMessage);
     } finally {
       setCheckOutLoading(false);
     }
   };
 
   const canCheckIn = () => {
+    if (!stats.attendanceSettings) return true;
+    
     const currentHours = currentTime.getHours();
     const currentMinutes = currentTime.getMinutes();
     const currentTotalMinutes = currentHours * 60 + currentMinutes;
@@ -491,7 +555,7 @@ export default function AdminDashboard() {
   };
 
   const canCheckOut = () => {
-    if (!stats.currentAttendance.hasCheckedIn) return false;
+    if (!stats.currentAttendance.hasCheckedIn || !stats.attendanceSettings) return false;
     
     const currentHours = currentTime.getHours();
     const currentMinutes = currentTime.getMinutes();
@@ -600,12 +664,30 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Error Banner */}
+      {error && (
+        <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-red-700">{error}</p>
+            <button
+              onClick={() => setError(null)}
+              className="text-red-700 hover:text-red-900"
+            >
+              <span className="sr-only">Dismiss</span>
+              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+      
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900"> Dashboard</h1>
           <p className="mt-2 text-sm text-gray-600">
-            Welcome back, {currentUser?.firstName}! Here's an overview of your organization.
+            Welcome back{currentUser?.firstName ? `, ${currentUser.firstName}` : ''}! Here's an overview of your organization.
           </p>
         </div>
         <div className="mt-4 sm:mt-0 flex items-center space-x-4">
@@ -631,153 +713,387 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Quick Attendance Actions */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">Today's Attendance</h2>
-            <p className="text-sm text-gray-600">
-              {new Date().toLocaleDateString('en-US', { 
-                weekday: 'long', 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-              })}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              Check-in: {stats.attendanceSettings.checkInStart} - {stats.attendanceSettings.checkInEnd} • 
-              Check-out: {stats.attendanceSettings.checkOutStart} - {stats.attendanceSettings.checkOutEnd}
-            </p>
-          </div>
-          <div className="flex items-center space-x-4">
-            {!stats.currentAttendance.hasCheckedIn ? (
-              <button
-                onClick={handleCheckIn}
-                disabled={checkInLoading}
-                className={`flex items-center px-6 py-3 rounded-lg transition-colors ${
-                  checkInLoading
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-green-600 text-white hover:bg-green-700'
-                } disabled:opacity-50`}
-              >
-                <PlayIcon className="w-5 h-5 mr-2" />
-                {checkInLoading ? 'Checking In...' : 'Check In'}
-              </button>
-            ) : !stats.currentAttendance.hasCheckedOut ? (
-              <button
-                onClick={handleCheckOut}
-                disabled={checkOutLoading || !stats.currentAttendance.hasCheckedIn}
-                className={`flex items-center px-6 py-3 rounded-lg transition-colors ${
-                  checkOutLoading || !stats.currentAttendance.hasCheckedIn
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-red-600 text-white hover:bg-red-700'
-                } disabled:opacity-50`}
-              >
-                <StopIcon className="w-5 h-5 mr-2" />
-                {checkOutLoading ? 'Checking Out...' : 'Check Out'}
-              </button>
+{/* Enhanced Attendance Actions */}
+<div className="bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-xl p-8 border border-gray-100">
+  {/* Header Section */}
+  <div className="flex flex-col md:flex-row md:items-center justify-between mb-8">
+    <div className="mb-6 md:mb-0">
+      <div className="flex items-center space-x-3 mb-3">
+        <div className="p-2 bg-blue-100 rounded-lg">
+          <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Today's Attendance</h2>
+          <p className="text-sm text-gray-500">
+            {new Date().toLocaleDateString('en-US', { 
+              weekday: 'long', 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric' 
+            })}
+          </p>
+        </div>
+      </div>
+      
+      {/* Time Windows Badge */}
+      {stats.attendanceSettings && (
+        <div className="flex flex-wrap gap-2 mt-4">
+          <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+            <svg className="w-3.5 h-3.5 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+            </svg>
+            Check-in: {stats.attendanceSettings.checkInStart} - {stats.attendanceSettings.checkInEnd}
+          </span>
+          <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100">
+            <svg className="w-3.5 h-3.5 mr-1.5" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+            </svg>
+            Check-out: {stats.attendanceSettings.checkOutStart} - {stats.attendanceSettings.checkOutEnd}
+          </span>
+        </div>
+      )}
+    </div>
+    
+    {/* Action Button */}
+    <div className="flex items-center space-x-4">
+      {!stats.currentAttendance.hasCheckedIn ? (
+        <button
+          onClick={handleCheckIn}
+          disabled={checkInLoading}
+          className={`
+            relative group flex items-center px-8 py-4 rounded-xl transition-all duration-300
+            ${checkInLoading
+              ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-inner'
+              : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg hover:shadow-xl hover:from-green-600 hover:to-emerald-700 hover:-translate-y-0.5 active:translate-y-0'
+            }
+            disabled:opacity-60 disabled:cursor-not-allowed
+          `}
+        >
+          <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <svg className={`w-7 h-6 mr-3 ${checkInLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {checkInLoading ? (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             ) : (
-              <div className="text-center">
-                <p className="text-sm text-gray-600">Today's attendance completed</p>
-                <p className="text-lg font-semibold text-gray-900">
-                  Worked: {stats.currentAttendance.workHours.toFixed(1)} hours
-                </p>
-              </div>
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
             )}
+          </svg>
+          <span className="font-semibold text-lg">
+            {checkInLoading ? 'Processing...' : 'Check In Now'}
+          </span>
+          <div className="ml-4 text-left">
+            <div className="text-sm opacity-90">Start your day</div>
+          </div>
+        </button>
+      ) : !stats.currentAttendance.hasCheckedOut ? (
+        <button
+          onClick={handleCheckOut}
+          disabled={checkOutLoading || !stats.currentAttendance.hasCheckedIn}
+          className={`
+            relative group flex items-center px-8 py-4 rounded-xl transition-all duration-300
+            ${checkOutLoading || !stats.currentAttendance.hasCheckedIn
+              ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-inner'
+              : 'bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg hover:shadow-xl hover:from-red-600 hover:to-rose-700 hover:-translate-y-0.5 active:translate-y-0'
+            }
+            disabled:opacity-60 disabled:cursor-not-allowed
+          `}
+        >
+          <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <svg className={`w-6 h-6 mr-3 ${checkOutLoading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {checkOutLoading ? (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            ) : (
+              <>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+              </>
+            )}
+          </svg>
+          <span className="font-semibold text-lg">
+            {checkOutLoading ? 'Processing...' : 'Check Out Now'}
+          </span>
+          <div className="ml-4 text-left">
+            <div className="text-sm opacity-90">End your day</div>
+          </div>
+        </button>
+      ) : (
+        <div className="text-center bg-gradient-to-br from-emerald-50 to-green-50 rounded-2xl p-6 border border-emerald-100 shadow-sm">
+          <div className="flex items-center justify-center mb-3">
+            <div className="p-2 bg-emerald-100 rounded-lg mr-3">
+              <svg className="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold text-emerald-900">Attendance Complete</h3>
+          </div>
+          <div className="text-3xl font-bold text-emerald-700 mb-1">
+            {stats.currentAttendance.workHours.toFixed(1)}
+            <span className="text-lg font-medium text-emerald-600"> hours</span>
+          </div>
+          <p className="text-sm text-emerald-600">Total work time today</p>
+        </div>
+      )}
+    </div>
+  </div>
+
+  {/* Attendance Stats Cards */}
+  <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+    {/* Check In Card */}
+    <div className={`
+      relative overflow-hidden rounded-xl p-5 transition-all duration-300 hover:shadow-md
+      ${stats.currentAttendance.checkInTime 
+        ? stats.currentAttendance.lateMinutes > 0 
+          ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-100' 
+          : 'bg-gradient-to-br from-blue-50 to-sky-50 border border-blue-100'
+        : 'bg-gray-50 border border-gray-100'
+      }
+    `}>
+      <div className="absolute top-0 right-0 w-20 h-20 opacity-10">
+        <svg className="w-full h-full" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+        </svg>
+      </div>
+      <div className="flex items-center mb-3">
+        <div className={`
+          p-2 rounded-lg mr-3
+          ${stats.currentAttendance.checkInTime 
+            ? stats.currentAttendance.lateMinutes > 0 
+              ? 'bg-amber-100 text-amber-600' 
+              : 'bg-blue-100 text-blue-600'
+            : 'bg-gray-200 text-gray-500'
+          }
+        `}>
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <p className="text-sm font-medium text-gray-600">Check In Time</p>
+      </div>
+      <p className="text-2xl font-bold text-gray-900 mb-1">
+        {stats.currentAttendance.checkInTime 
+          ? new Date(stats.currentAttendance.checkInTime).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
+            })
+          : '--:-- --'
+        }
+      </p>
+      {stats.currentAttendance.lateMinutes > 0 ? (
+        <div className="inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+          <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+          </svg>
+          {stats.currentAttendance.lateMinutes} min late
+        </div>
+      ) : stats.currentAttendance.checkInTime && (
+        <div className="inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+          <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+          On time
+        </div>
+      )}
+    </div>
+
+    {/* Check Out Card */}
+    <div className={`
+      relative overflow-hidden rounded-xl p-5 transition-all duration-300 hover:shadow-md
+      ${stats.currentAttendance.checkOutTime 
+        ? stats.currentAttendance.earlyCheckout
+          ? 'bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100'
+          : 'bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-100'
+        : 'bg-gray-50 border border-gray-100'
+      }
+    `}>
+      <div className="absolute top-0 right-0 w-20 h-20 opacity-10">
+        <svg className="w-full h-full" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+        </svg>
+      </div>
+      <div className="flex items-center mb-3">
+        <div className={`
+          p-2 rounded-lg mr-3
+          ${stats.currentAttendance.checkOutTime 
+            ? stats.currentAttendance.earlyCheckout
+              ? 'bg-orange-100 text-orange-600'
+              : 'bg-purple-100 text-purple-600'
+            : 'bg-gray-200 text-gray-500'
+          }
+        `}>
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+        </div>
+        <p className="text-sm font-medium text-gray-600">Check Out Time</p>
+      </div>
+      <p className="text-2xl font-bold text-gray-900 mb-1">
+        {stats.currentAttendance.checkOutTime 
+          ? new Date(stats.currentAttendance.checkOutTime).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
+            })
+          : '--:-- --'
+        }
+      </p>
+      {stats.currentAttendance.earlyCheckout ? (
+        <div className="inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+          <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+          </svg>
+          Early checkout
+        </div>
+      ) : stats.currentAttendance.checkOutTime && (
+        <div className="inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+          <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+          Regular checkout
+        </div>
+      )}
+    </div>
+
+    {/* Work Hours Card */}
+    <div className="relative overflow-hidden rounded-xl p-5 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100 transition-all duration-300 hover:shadow-md">
+      <div className="absolute top-0 right-0 w-20 h-20 opacity-10">
+        <svg className="w-full h-full" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M13 2.05v3.03c3.39.49 6 3.39 6 6.92 0 .9-.18 1.75-.5 2.54l2.62 1.53c.56-1.24.88-2.62.88-4.07 0-5.18-3.95-9.45-9-9.95zM12 19c-3.87 0-7-3.13-7-7 0-3.53 2.61-6.43 6-6.92V2.05c-5.06.5-9 4.76-9 9.95 0 5.52 4.47 10 9.98 10 3.3 0 6.23-1.61 8.05-4.09l-2.6-1.53C16.17 17.98 14.21 19 12 19z" />
+        </svg>
+      </div>
+      <div className="flex items-center mb-3">
+        <div className="p-2 bg-emerald-100 rounded-lg mr-3">
+          <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        </div>
+        <p className="text-sm font-medium text-gray-600">Work Hours</p>
+      </div>
+      <div className="flex items-baseline">
+        <p className="text-2xl font-bold text-gray-900">
+          {calculateCurrentWorkHours().toFixed(1)}
+        </p>
+        <span className="text-lg font-medium text-gray-600 ml-1">hours</span>
+      </div>
+      {stats.attendanceSettings && (
+        <div className="mt-3 pt-3 border-t border-emerald-200">
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-gray-500">Target</span>
+            <span className="text-sm font-medium text-gray-700">{stats.attendanceSettings.workHours}h</span>
+          </div>
+          <div className="mt-2">
+            <div className="h-1.5 bg-emerald-200 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                style={{ 
+                  width: `${Math.min(100, (calculateCurrentWorkHours() / stats.attendanceSettings.workHours) * 100)}%` 
+                }}
+              />
+            </div>
           </div>
         </div>
+      )}
+    </div>
 
-        {/* Attendance Status Details */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="text-center p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">Check In</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {stats.currentAttendance.checkInTime 
-                ? new Date(stats.currentAttendance.checkInTime).toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                  })
-                : '--:--'
-              }
-            </p>
+    {/* Status Card */}
+    <div className={`
+      relative overflow-hidden rounded-xl p-5 border transition-all duration-300 hover:shadow-md
+      ${stats.currentAttendance.status === 'present' 
+        ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-100'
+        : stats.currentAttendance.status === 'late'
+        ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-100'
+        : stats.currentAttendance.status === 'half day'
+        ? 'bg-gradient-to-br from-blue-50 to-cyan-50 border-blue-100'
+        : stats.currentAttendance.status === 'absent'
+        ? 'bg-gradient-to-br from-red-50 to-rose-50 border-red-100'
+        : 'bg-gray-50 border-gray-100'
+      }
+    `}>
+      <div className="absolute top-0 right-0 w-20 h-20 opacity-10">
+        <svg className="w-full h-full" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+        </svg>
+      </div>
+      <div className="flex items-center mb-3">
+        <div className={`
+          p-2 rounded-lg mr-3
+          ${stats.currentAttendance.status === 'present'
+            ? 'bg-green-100 text-green-600'
+            : stats.currentAttendance.status === 'late'
+            ? 'bg-amber-100 text-amber-600'
+            : stats.currentAttendance.status === 'half day'
+            ? 'bg-blue-100 text-blue-600'
+            : stats.currentAttendance.status === 'absent'
+            ? 'bg-red-100 text-red-600'
+            : 'bg-gray-200 text-gray-500'
+          }
+        `}>
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <p className="text-sm font-medium text-gray-600">Attendance Status</p>
+      </div>
+      <div className={`
+        inline-flex items-center px-4 py-2 rounded-lg font-semibold
+        ${stats.currentAttendance.status === 'present' 
+          ? 'bg-green-500 text-white'
+          // : stats.currentAttendance.status === 'late'
+          // ? 'bg-amber-500 text-white'
+          // : stats.currentAttendance.status === 'half day'
+          // ? 'bg-blue-500 text-white'
+          : stats.currentAttendance.status === 'absent'
+          ? 'bg-red-500 text-white'
+          : 'bg-gray-500 text-white'
+        }
+      `}>
+        <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+          {stats.currentAttendance.status === 'present' ? (
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          ) : stats.currentAttendance.status === 'late' || stats.currentAttendance.status === 'absent' ? (
+            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+          ) : (
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+          )}
+        </svg>
+        {stats.currentAttendance.status.replace('_', ' ').toUpperCase()}
+      </div>
+    </div>
+  </div>
+
+  {/* Real-time Status Banner */}
+  {stats.currentAttendance.hasCheckedIn && !stats.currentAttendance.hasCheckedOut && (
+    <div className="mt-8 p-4 bg-gradient-to-r from-emerald-500 to-green-600 rounded-xl text-white shadow-lg">
+      <div className="flex items-center">
+        <div className="flex-shrink-0 mr-3">
+          <div className="p-2 bg-white/20 rounded-lg">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+        </div>
+        <div className="flex-1">
+          <h4 className="font-bold">Currently Working</h4>
+          <p className="text-sm opacity-90">
+            Checked in at {stats.currentAttendance.checkInTime && new Date(stats.currentAttendance.checkInTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
             {stats.currentAttendance.lateMinutes > 0 && (
-              <p className="text-sm text-yellow-600">
-                {stats.currentAttendance.lateMinutes} minutes late
-              </p>
+              <span className="ml-2 bg-white/20 px-2 py-0.5 rounded-full">
+                {stats.currentAttendance.lateMinutes} min late
+              </span>
             )}
-          </div>
-          
-          <div className="text-center p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">Check Out</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {stats.currentAttendance.checkOutTime 
-                ? new Date(stats.currentAttendance.checkOutTime).toLocaleTimeString('en-US', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    hour12: true
-                  })
-                : '--:--'
-              }
-            </p>
-            {stats.currentAttendance.earlyCheckout && (
-              <p className="text-sm text-orange-600">Early checkout</p>
-            )}
-          </div>
-
-          <div className="text-center p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">Work Hours</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {calculateCurrentWorkHours().toFixed(1)}h
-            </p>
-            <p className="text-xs text-gray-500">
-              Required: {stats.attendanceSettings.workHours}h
-            </p>
-          </div>
-
-          <div className="text-center p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">Status</p>
-            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-              stats.currentAttendance.status === 'present' 
-                ? 'bg-green-100 text-green-800'
-                : stats.currentAttendance.status === 'late'
-                ? 'bg-yellow-100 text-yellow-800'
-                : stats.currentAttendance.status === 'half_day'
-                ? 'bg-blue-100 text-blue-800'
-                : stats.currentAttendance.status === 'absent'
-                ? 'bg-red-100 text-red-800'
-                : 'bg-gray-100 text-gray-800'
-            }`}>
-              {stats.currentAttendance.status.replace('_', ' ').toUpperCase()}
-            </span>
-          </div>
+          </p>
         </div>
-
-        {/* Check-in/out Instructions (informational only; employees may check in/out anytime)
-            Calculations (late/early/overtime) are based on the windows shown below. */}
-        {!stats.currentAttendance.hasCheckedIn && (
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-700">
-              <strong>Check-in Window:</strong> {stats.attendanceSettings.checkInStart} - {stats.attendanceSettings.checkInEnd}
-            </p>
-          </div>
-        )}
-
-        {stats.currentAttendance.hasCheckedIn && !stats.currentAttendance.hasCheckedOut && (
-          <div className="mt-4 p-3 bg-green-50 rounded-lg">
-            <p className="text-sm text-green-700">
-              <strong>Checked in at:</strong> {stats.currentAttendance.checkInTime && new Date(stats.currentAttendance.checkInTime).toLocaleTimeString()}
-              {stats.currentAttendance.lateMinutes > 0 && (
-                <span className="ml-2 text-yellow-600">
-                  • {stats.currentAttendance.lateMinutes} minutes late
-                </span>
-              )}
-              <br />
-              <strong>Check-out Window:</strong> {stats.attendanceSettings.checkOutStart} - {stats.attendanceSettings.checkOutEnd}
-            </p>
+        {stats.attendanceSettings && (
+          <div className="text-right">
+            <p className="text-sm opacity-90">You can check out from</p>
+            <p className="font-bold text-lg">{stats.attendanceSettings.checkOutStart}</p>
           </div>
         )}
       </div>
+    </div>
+  )}
+</div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -986,96 +1302,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Attendance Records Table */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            Attendance Records
-          </h2>
-          <p className="text-xs text-gray-500">
-            Check-in: {stats.attendanceSettings.checkInStart} - {stats.attendanceSettings.checkInEnd} | 
-            Check-out: {stats.attendanceSettings.checkOutStart} - {stats.attendanceSettings.checkOutEnd}
-          </p>
-        </div>
-        
-        {attendanceLoading ? (
-          <div className="text-center py-8">
-            <p className="text-gray-500">Loading attendance records...</p>
-          </div>
-        ) : attendanceRecords.length === 0 ? (
-          <div className="text-center py-8">
-            <p className="text-gray-500">No attendance records found</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Employee
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Department
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Check In
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Check Out
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Work Hours
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {attendanceRecords.map((record) => {
-                  const statusColor =
-                    record.status.includes('Late') ? 'bg-red-100 text-red-800' :
-                    record.status.includes('Early') ? 'bg-yellow-100 text-yellow-800' :
-                    record.status.includes('Overtime') ? 'bg-blue-100 text-blue-800' :
-                    record.status === 'On Time' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
-
-                  return (
-                    <tr key={record.id}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {record.employeeName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {record.departmentName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {new Date(record.date).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {record.checkIn ? new Date(record.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {record.checkOut ? new Date(record.checkOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {parseFloat(record.workHours).toFixed(1)} hrs
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}`}>
-                          {record.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
+      
       {/* Quick Stats and System Health */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* System Health */}
@@ -1179,6 +1406,7 @@ function AttendanceChart({ data }: { data: DashboardStats['attendanceTrend'] }) 
             <p className="text-xs font-semibold text-gray-900">
               {presentPercentage.toFixed(0)}%
             </p>
+            
           </div>
         );
       })}
