@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/leave/approvers
- * Returns list of users who can approve leave requests
+ * Returns list of users who can approve leave requests based on role's canApprove flag
  * Excludes the requesting user themselves
  */
 export async function GET(request: NextRequest) {
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 
     const currentUserId = decoded.id;
 
-    // Get all users with their roles and check for approve permission
+    // Get all users with their roles and check for canApprove flag
     const approversData = await db
       .select({
         userId: users.id,
@@ -39,7 +39,8 @@ export async function GET(request: NextRequest) {
         position: employees.position,
         employeeId: employees.employeeId,
         departmentId: employees.departmentId,
-        rolePermissions: roles.permissions,
+        roleCanApprove: roles.canApprove,
+        roleName: roles.name,
         employeeIsActive: employees.isActive,
       })
       .from(users)
@@ -49,7 +50,9 @@ export async function GET(request: NextRequest) {
       .leftJoin(roles, eq(userRoles.roleId, roles.id))
       .where(eq(users.isActive, true));
 
-    // Filter approvers based on permissions
+    console.log('Approvers data fetched:', approversData.length, 'records');
+
+    // Filter approvers based on canApprove flag
     const approvers = approversData
       .filter(user => {
         // Skip if employee record exists but is inactive
@@ -61,20 +64,9 @@ export async function GET(request: NextRequest) {
         // Admin always has approve permission
         if (user.role === 'admin') return true;
 
-        // Check if user has approve permission for leave module
-        if (user.rolePermissions) {
-          try {
-            let permissions = user.rolePermissions;
-            if (typeof permissions === 'string') {
-              permissions = JSON.parse(permissions);
-            }
-            
-            // Check if leave.approve permission exists and is true
-            return permissions?.leave?.approve === true;
-          } catch (e) {
-            console.error('Error parsing permissions for user:', user.userId, e);
-            return false;
-          }
+        // Check if user has canApprove flag set to true from their role
+        if (user.roleCanApprove === true) {
+          return true;
         }
 
         return false;
@@ -88,6 +80,7 @@ export async function GET(request: NextRequest) {
         position: user.position || 'N/A',
         employeeId: user.employeeId || 'N/A',
         role: user.role,
+        roleName: user.roleName || 'N/A',
       }));
 
     // Remove duplicates (in case user has multiple role assignments)
@@ -96,7 +89,7 @@ export async function GET(request: NextRequest) {
     );
 
     console.log(`Found ${uniqueApprovers.length} approvers for user ${currentUserId}`);
-    console.log('Total users checked:', approversData.length);
+    console.log('Approvers list:', uniqueApprovers.map(a => `${a.fullName} (${a.roleName})`));
 
     return NextResponse.json({
       success: true,

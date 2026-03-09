@@ -25,7 +25,41 @@ export async function GET(req: NextRequest) {
     const department = searchParams.get('department');
     const status = searchParams.get('status');
 
-    let query = db
+    // Build the where conditions array
+    const conditions = [];
+
+    // Apply filters based on view
+    if (view === 'daily') {
+      conditions.push(eq(attendance.date, date));
+    } else if (view === 'monthly') {
+      const startOfMonth = new Date(date);
+      startOfMonth.setDate(1);
+      const endOfMonth = new Date(startOfMonth);
+      endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+      endOfMonth.setDate(0);
+
+      conditions.push(
+        and(
+          gte(attendance.date, startOfMonth.toISOString().split('T')[0]),
+          lte(attendance.date, endOfMonth.toISOString().split('T')[0])
+        )
+      );
+    }
+
+    // Apply department filter
+    if (department) {
+      conditions.push(eq(departments.name, department));
+    }
+
+    // Apply status filter
+    if (status) {
+      conditions.push(eq(attendance.status, status));
+    }
+
+    // Build the final query with all conditions
+    const finalConditions = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const records = await db
       .select({
         id: attendance.id,
         employeeId: employees.id,
@@ -47,37 +81,9 @@ export async function GET(req: NextRequest) {
       .innerJoin(employees, eq(attendance.employeeId, employees.id))
       .innerJoin(users, eq(employees.userId, users.id))
       .innerJoin(userProfiles, eq(users.id, userProfiles.userId))
-      .leftJoin(departments, eq(employees.departmentId, departments.id));
-
-    // Apply filters based on view
-    if (view === 'daily') {
-      query = query.where(eq(attendance.date, date));
-    } else if (view === 'monthly') {
-      const startOfMonth = new Date(date);
-      startOfMonth.setDate(1);
-      const endOfMonth = new Date(startOfMonth);
-      endOfMonth.setMonth(endOfMonth.getMonth() + 1);
-      endOfMonth.setDate(0);
-
-      query = query.where(
-        and(
-          gte(attendance.date, startOfMonth.toISOString().split('T')[0]),
-          lte(attendance.date, endOfMonth.toISOString().split('T')[0])
-        )
-      );
-    }
-
-    // Apply department filter
-    if (department) {
-      query = query.where(eq(departments.name, department));
-    }
-
-    // Apply status filter
-    if (status) {
-      query = query.where(eq(attendance.status, status));
-    }
-
-    const records = await query.orderBy(desc(attendance.date));
+      .leftJoin(departments, eq(employees.departmentId, departments.id))
+      .where(finalConditions)
+      .orderBy(desc(attendance.date));
 
     return NextResponse.json({
       attendance: records,

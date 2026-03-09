@@ -219,6 +219,7 @@ export const roles = pgTable('roles', {
   isDefault: boolean('is_default').default(false),
   isSystem: boolean('is_system').default(false), // system roles cannot be deleted/modified
   usersCount: integer('users_count').default(0),
+  canApprove: boolean('can_approve').default(false), // Flag to indicate if this role can approve leave requests
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });

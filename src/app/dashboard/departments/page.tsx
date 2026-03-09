@@ -11,6 +11,9 @@ import {
   UserCircleIcon,
   CheckCircleIcon,
   XCircleIcon,
+  XMarkIcon,
+  ExclamationCircleIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasPermission } from '@/lib/auth/permissions';
@@ -31,6 +34,13 @@ interface Employee {
   email: string;
 }
 
+interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  message: string;
+  duration?: number;
+}
+
 export default function DepartmentsPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -40,6 +50,9 @@ export default function DepartmentsPage() {
   const [showViewModal, setShowViewModal] = useState(false);
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null);
   const [viewingDepartment, setViewingDepartment] = useState<Department | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -47,11 +60,25 @@ export default function DepartmentsPage() {
 
   const { user } = useAuth();
     
-    // Check permissions for each action
-    const canViewDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'view');
-    const canCreateDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'create');
-    const canEditDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'edit');
-    const canDeleteDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'delete');
+  // Check permissions for each action
+  const canViewDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'view');
+  const canCreateDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'create');
+  const canEditDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'edit');
+  const canDeleteDepartment = user?.role === 'admin' || hasPermission(user?.permissions, 'departments', 'delete');
+
+  // Toast functions
+  const addToast = (type: Toast['type'], message: string, duration = 5000) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message, duration }]);
+    
+    setTimeout(() => {
+      removeToast(id);
+    }, duration);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  };
 
   useEffect(() => {
     fetchDepartments();
@@ -68,9 +95,13 @@ export default function DepartmentsPage() {
       if (response.ok) {
         const data = await response.json();
         setDepartments(data.departments);
+      } else {
+        const error = await response.json();
+        addToast('error', error.message || 'Failed to fetch departments');
       }
     } catch (error) {
       console.error('Failed to fetch departments:', error);
+      addToast('error', 'Failed to fetch departments. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -86,9 +117,13 @@ export default function DepartmentsPage() {
       if (response.ok) {
         const data = await response.json();
         setEmployees(data.employees || []);
+      } else {
+        const error = await response.json();
+        addToast('error', error.message || 'Failed to fetch employees');
       }
     } catch (error) {
       console.error('Failed to fetch employees:', error);
+      addToast('error', 'Failed to fetch employees. Please try again.');
     }
   };
 
@@ -111,18 +146,18 @@ export default function DepartmentsPage() {
       });
 
       if (response.ok) {
-        alert(`Department ${editingDepartment ? 'updated' : 'created'} successfully`);
+        addToast('success', `Department ${editingDepartment ? 'updated' : 'created'} successfully`);
         setShowModal(false);
         setEditingDepartment(null);
         setFormData({ name: '', description: ''});
         fetchDepartments();
       } else {
         const error = await response.json();
-        alert(error.message || 'Operation failed');
+        addToast('error', error.message || 'Operation failed');
       }
     } catch (error) {
       console.error('Failed to save department:', error);
-      alert('Failed to save department');
+      addToast('error', 'Failed to save department. Please try again.');
     }
   };
 
@@ -131,7 +166,6 @@ export default function DepartmentsPage() {
     setFormData({
       name: dept.name,
       description: dept.description || '',
-      
     });
     setShowModal(true);
   };
@@ -143,14 +177,14 @@ export default function DepartmentsPage() {
 
   const handleDelete = async (deptId: string, employeeCount: number) => {
     if (employeeCount > 0) {
-      alert('Cannot delete department with employees. Please reassign employees first.');
+      setDeleteError('Cannot delete department with employees. Please reassign employees first.');
       return;
     }
 
-    if (!confirm('Are you sure you want to delete this department?')) {
-      return;
-    }
+    setShowDeleteConfirm(deptId);
+  };
 
+  const confirmDelete = async (deptId: string) => {
     try {
       const token = localStorage.getItem('auth-token');
       const response = await fetch(`/api/admin/departments/${deptId}`, {
@@ -159,16 +193,25 @@ export default function DepartmentsPage() {
       });
 
       if (response.ok) {
-        alert('Department deleted successfully');
+        addToast('success', 'Department deleted successfully');
+        setShowDeleteConfirm(null);
+        setDeleteError(null);
         fetchDepartments();
       } else {
         const error = await response.json();
-        alert(error.message || 'Failed to delete department');
+        addToast('error', error.message || 'Failed to delete department');
+        setShowDeleteConfirm(null);
       }
     } catch (error) {
       console.error('Failed to delete department:', error);
-      alert('Failed to delete department');
+      addToast('error', 'Failed to delete department. Please try again.');
+      setShowDeleteConfirm(null);
     }
+  };
+
+  const cancelDelete = () => {
+    setShowDeleteConfirm(null);
+    setDeleteError(null);
   };
 
   const handleToggleStatus = async (deptId: string, currentStatus: boolean) => {
@@ -184,11 +227,15 @@ export default function DepartmentsPage() {
       });
 
       if (response.ok) {
-        alert(`Department ${!currentStatus ? 'activated' : 'deactivated'} successfully`);
+        addToast('success', `Department ${!currentStatus ? 'activated' : 'deactivated'} successfully`);
         fetchDepartments();
+      } else {
+        const error = await response.json();
+        addToast('error', error.message || 'Failed to toggle department status');
       }
     } catch (error) {
       console.error('Failed to toggle department status:', error);
+      addToast('error', 'Failed to toggle department status. Please try again.');
     }
   };
 
@@ -210,6 +257,100 @@ export default function DepartmentsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Toast Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`flex items-center p-4 rounded-lg shadow-lg max-w-md transform transition-all duration-300 animate-slide-in ${
+              toast.type === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
+              toast.type === 'error' ? 'bg-red-50 border-l-4 border-red-500' :
+              toast.type === 'warning' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
+              'bg-blue-50 border-l-4 border-blue-500'
+            }`}
+          >
+            <div className="flex-shrink-0">
+              {toast.type === 'success' && <CheckCircleIcon className="w-5 h-5 text-green-400" />}
+              {toast.type === 'error' && <ExclamationCircleIcon className="w-5 h-5 text-red-400" />}
+              {toast.type === 'warning' && <ExclamationCircleIcon className="w-5 h-5 text-yellow-400" />}
+              {toast.type === 'info' && <InformationCircleIcon className="w-5 h-5 text-blue-400" />}
+            </div>
+            <div className="ml-3 flex-1">
+              <p className={`text-sm font-medium ${
+                toast.type === 'success' ? 'text-green-800' :
+                toast.type === 'error' ? 'text-red-800' :
+                toast.type === 'warning' ? 'text-yellow-800' :
+                'text-blue-800'
+              }`}>
+                {toast.message}
+              </p>
+            </div>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="ml-4 flex-shrink-0 text-gray-400 hover:text-gray-600"
+            >
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full">
+              <ExclamationCircleIcon className="w-6 h-6 text-red-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Confirm Delete
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Are you sure you want to delete this department? This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={cancelDelete}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmDelete(showDeleteConfirm)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Error Modal */}
+      {deleteError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-yellow-100 rounded-full">
+              <ExclamationCircleIcon className="w-6 h-6 text-yellow-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Cannot Delete Department
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              {deleteError}
+            </p>
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={() => setDeleteError(null)}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -341,8 +482,6 @@ export default function DepartmentsPage() {
                 {dept.description || 'No description provided'}
               </p>
 
-              
-
               <div className="flex space-x-2 pt-4 border-t border-gray-200">
                 {canViewDepartment && (
                 <button
@@ -394,7 +533,7 @@ export default function DepartmentsPage() {
               : 'Get started by creating your first department'
             }
           </p>
-          {!searchQuery && (
+          {!searchQuery && canCreateDepartment && (
             <button
               onClick={() => setShowModal(true)}
               className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
@@ -440,8 +579,6 @@ export default function DepartmentsPage() {
                   placeholder="Brief description of the department's role and responsibilities"
                 />
               </div>
-
-              
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <h4 className="text-sm font-medium text-blue-900 mb-1">📌 Important Notes:</h4>

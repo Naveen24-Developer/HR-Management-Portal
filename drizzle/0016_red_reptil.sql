@@ -1,0 +1,1 @@
+ALTER TABLE "roles" ADD COLUMN "can_approve" boolean DEFAULT false;

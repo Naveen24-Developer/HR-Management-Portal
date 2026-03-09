@@ -11,6 +11,7 @@ const updateRoleSchema = z.object({
   permissions: z.record(z.record(z.boolean())),
   sidebarPermissions: z.array(z.string()).optional().default([]),
   pagePermissions: z.array(z.string()).optional().default([]),
+  canApprove: z.boolean().optional().default(false),
 });
 
 // GET /api/admin/roles/[id] - Get role by ID
@@ -125,6 +126,7 @@ export async function PUT(
         permissions: validatedData.permissions,
         sidebarPermissions: validatedData.sidebarPermissions,
         pagePermissions: validatedData.pagePermissions,
+        canApprove: validatedData.canApprove,
         updatedAt: new Date(),
       })
       .where(eq(roles.id, id))

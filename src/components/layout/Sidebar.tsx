@@ -48,7 +48,7 @@ export const navigationItems: NavigationItem[] = [
     icon: BuildingOfficeIcon,
     module: 'departments',
     description: 'Manage departments',
-    badge: 'New',
+
   },
   {
     name: 'Attendance',

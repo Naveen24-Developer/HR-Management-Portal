@@ -9,6 +9,11 @@ import {
   EyeIcon,
   UserCircleIcon,
   FunnelIcon,
+  XMarkIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  InformationCircleIcon,
+  EyeSlashIcon,
 } from '@heroicons/react/24/outline';
 import { PermissionGuard } from '@/components/auth/PermissionGuard';
 import { useAuth } from '@/contexts/AuthContext';
@@ -35,6 +40,13 @@ interface Department {
   isActive: boolean;
 }
 
+interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  message: string;
+  duration?: number;
+}
+
 export default function EmployeeManagement() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -45,6 +57,8 @@ export default function EmployeeManagement() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [viewEmployee, setViewEmployee] = useState<Employee | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   
   // Get user and permissions from auth context
   const { user } = useAuth();
@@ -54,6 +68,21 @@ export default function EmployeeManagement() {
   const canCreateEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'create');
   const canEditEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'edit');
   const canDeleteEmployee = user?.role === 'admin' || hasPermission(user?.permissions, 'employees', 'delete');
+
+  // Toast functions
+  const addToast = (type: Toast['type'], message: string, duration = 5000) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message, duration }]);
+    
+    // Auto remove after duration
+    setTimeout(() => {
+      removeToast(id);
+    }, duration);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  };
 
   useEffect(() => {
     fetchEmployees();
@@ -79,10 +108,12 @@ export default function EmployeeManagement() {
         const data = await response.json();
         setEmployees(data.employees);
       } else {
-        console.error('Failed to fetch employees');
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch employees');
       }
     } catch (error) {
       console.error('Failed to fetch employees:', error);
+      addToast('error', 'Failed to fetch employees. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -100,17 +131,21 @@ export default function EmployeeManagement() {
       if (response.ok) {
         const data = await response.json();
         setDepartments(data.departments.filter((dept: Department) => dept.isActive));
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch departments');
       }
     } catch (error) {
       console.error('Failed to fetch departments:', error);
+      addToast('error', 'Failed to fetch departments. Please try again.');
     }
   };
 
   const handleDelete = async (employeeId: string) => {
-    if (!confirm('Are you sure you want to deactivate this employee?')) {
-      return;
-    }
+    setShowDeleteConfirm(employeeId);
+  };
 
+  const confirmDelete = async (employeeId: string) => {
     try {
       const token = localStorage.getItem('auth-token');
       const response = await fetch(`/api/admin/employees/${employeeId}`, {
@@ -122,20 +157,28 @@ export default function EmployeeManagement() {
 
       if (response.ok) {
         fetchEmployees();
-        alert('Employee deactivated successfully');
+        addToast('success', 'Employee deactivated successfully');
+        setShowDeleteConfirm(null);
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to deactivate employee');
+        addToast('error', error.error || 'Failed to deactivate employee');
+        setShowDeleteConfirm(null);
       }
     } catch (error) {
       console.error('Failed to delete employee:', error);
-      alert('Failed to deactivate employee');
+      addToast('error', 'Failed to deactivate employee. Please try again.');
+      setShowDeleteConfirm(null);
     }
+  };
+
+  const cancelDelete = () => {
+    setShowDeleteConfirm(null);
   };
 
   const handleFilter = () => {
     setLoading(true);
     fetchEmployees();
+    addToast('info', 'Filters applied successfully');
   };
 
   const handleResetFilters = () => {
@@ -143,9 +186,9 @@ export default function EmployeeManagement() {
     setSelectedDepartment('');
     setSelectedStatus('');
     setLoading(true);
-    // Fetch without filters after a short delay
     setTimeout(() => {
       fetchEmployees();
+      addToast('info', 'Filters reset successfully');
     }, 100);
   };
 
@@ -170,6 +213,75 @@ export default function EmployeeManagement() {
 
   return (
     <div className="space-y-6">
+      {/* Toast Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`flex items-center p-4 rounded-lg shadow-lg max-w-md transform transition-all duration-300 animate-slide-in ${
+              toast.type === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
+              toast.type === 'error' ? 'bg-red-50 border-l-4 border-red-500' :
+              toast.type === 'warning' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
+              'bg-blue-50 border-l-4 border-blue-500'
+            }`}
+          >
+            <div className="flex-shrink-0">
+              {toast.type === 'success' && <CheckCircleIcon className="w-5 h-5 text-green-400" />}
+              {toast.type === 'error' && <ExclamationCircleIcon className="w-5 h-5 text-red-400" />}
+              {toast.type === 'warning' && <ExclamationCircleIcon className="w-5 h-5 text-yellow-400" />}
+              {toast.type === 'info' && <InformationCircleIcon className="w-5 h-5 text-blue-400" />}
+            </div>
+            <div className="ml-3 flex-1">
+              <p className={`text-sm font-medium ${
+                toast.type === 'success' ? 'text-green-800' :
+                toast.type === 'error' ? 'text-red-800' :
+                toast.type === 'warning' ? 'text-yellow-800' :
+                'text-blue-800'
+              }`}>
+                {toast.message}
+              </p>
+            </div>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="ml-4 flex-shrink-0 text-gray-400 hover:text-gray-600"
+            >
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full">
+              <ExclamationCircleIcon className="w-6 h-6 text-red-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Confirm Deactivation
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Are you sure you want to deactivate this employee? This action can be reversed later.
+            </p>
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={cancelDelete}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmDelete(showDeleteConfirm)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Deactivate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -441,6 +553,7 @@ export default function EmployeeManagement() {
             setShowAddModal(false);
             fetchEmployees();
           }}
+          addToast={addToast}
         />
       )}
 
@@ -452,6 +565,7 @@ export default function EmployeeManagement() {
             setSelectedEmployee(null);
             fetchEmployees();
           }}
+          addToast={addToast}
         />
       )}
 
@@ -467,10 +581,11 @@ export default function EmployeeManagement() {
 }
 
 // Employee Modal Component
-function EmployeeModal({ employee, onClose, onSuccess }: {
+function EmployeeModal({ employee, onClose, onSuccess, addToast }: {
   employee: Employee | null;
   onClose: () => void;
   onSuccess: () => void;
+  addToast: (type: Toast['type'], message: string, duration?: number) => void;
 }) {
   const [formData, setFormData] = useState({
     firstName: employee?.firstName || '',
@@ -484,6 +599,7 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
     joinDate: employee?.joinDate || new Date().toISOString().split('T')[0],
     password: '', // Only used for new employees
   });
+  const [showPassword, setShowPassword] = useState(false);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -510,9 +626,13 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
         if (employee?.departmentId && !formData.departmentId && activeDepartments.length > 0) {
           setFormData(prev => ({ ...prev, departmentId: employee.departmentId }));
         }
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch departments');
       }
     } catch (error) {
       console.error('Failed to fetch departments:', error);
+      addToast('error', 'Failed to fetch departments. Please try again.');
     }
   };
 
@@ -562,6 +682,7 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
     e.preventDefault();
     
     if (!validateForm()) {
+      addToast('error', 'Please fix the errors in the form');
       return;
     }
 
@@ -589,18 +710,22 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
 
       if (response.ok) {
         onSuccess();
-        alert(employee ? 'Employee updated successfully' : 'Employee added successfully');
+        addToast('success', employee ? 'Employee updated successfully' : 'Employee added successfully');
       } else {
         setErrors({ submit: data.error || 'Failed to save employee' });
-        alert(data.error || 'Failed to save employee');
+        addToast('error', data.error || 'Failed to save employee');
       }
     } catch (error) {
       console.error('Failed to save employee:', error);
       setErrors({ submit: 'Failed to save employee. Please try again.' });
-      alert('Failed to save employee');
+      addToast('error', 'Failed to save employee. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const togglePasswordVisibility = () => {
+    setShowPassword(!showPassword);
   };
 
   return (
@@ -684,16 +809,29 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Password * (for first login)
               </label>
-              <input
-                type="password"
-                required={!employee}
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className={`w-full px-3 py-2 border rounded-md focus:ring-indigo-500 focus:border-indigo-500 ${
-                  errors.password ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Enter a secure password (min 6 characters)"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required={!employee}
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  className={`w-full px-3 py-2 border rounded-md focus:ring-indigo-500 focus:border-indigo-500 pr-10 ${
+                    errors.password ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="Enter a secure password (min 6 characters)"
+                />
+                <button
+                  type="button"
+                  onClick={togglePasswordVisibility}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
+                >
+                  {showPassword ? (
+                    <EyeSlashIcon className="h-5 w-5" />
+                  ) : (
+                    <EyeIcon className="h-5 w-5" />
+                  )}
+                </button>
+              </div>
               {errors.password && (
                 <p className="mt-1 text-sm text-red-600">{errors.password}</p>
               )}
@@ -766,7 +904,7 @@ function EmployeeModal({ employee, onClose, onSuccess }: {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Salary ($)
+                Salary (₹)
               </label>
               <input
                 type="number"
@@ -905,7 +1043,10 @@ function ViewEmployeeModal({ employee, onClose }: {
                 <div>
                   <h4 className="text-sm font-medium text-gray-500">Salary</h4>
                   <p className="text-sm text-gray-900">
-                    ${employee.salary.toLocaleString()}
+                    {employee.salary.toLocaleString('en-IN', {
+                      style: 'currency',
+                      currency: 'INR'
+                    })}
                   </p>
                 </div>
               )}

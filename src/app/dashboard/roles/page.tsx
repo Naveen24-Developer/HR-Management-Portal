@@ -12,6 +12,10 @@ import {
   CheckCircleIcon,
   XCircleIcon,
   UsersIcon,
+  CheckBadgeIcon,
+  XMarkIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
 interface Role {
@@ -24,6 +28,7 @@ interface Role {
   isDefault: boolean;
   isSystem: boolean;
   usersCount: number;
+  canApprove: boolean; // New field
   createdAt: string;
   updatedAt: string;
 }
@@ -32,6 +37,13 @@ interface PermissionMatrix {
   [module: string]: {
     [action: string]: boolean;
   };
+}
+
+interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  message: string;
+  duration?: number;
 }
 
 const defaultPermissions: PermissionMatrix = {
@@ -82,14 +94,31 @@ export default function RolesAndAccess() {
   const [viewingRole, setViewingRole] = useState<Role | null>(null);
   const [assigningRole, setAssigningRole] = useState<Role | null>(null);
   const [showAssignModal, setShowAssignModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<{id: string, name: string} | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     permissions: { ...defaultPermissions },
     sidebarPermissions: [] as string[],
     pagePermissions: [] as string[],
+    canApprove: false,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Toast functions
+  const addToast = (type: Toast['type'], message: string, duration = 5000) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message, duration }]);
+    
+    setTimeout(() => {
+      removeToast(id);
+    }, duration);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  };
 
   useEffect(() => {
     fetchRoles();
@@ -105,9 +134,13 @@ export default function RolesAndAccess() {
       if (response.ok) {
         const data = await response.json();
         setRoles(data.roles);
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch roles');
       }
     } catch (error) {
       console.error('Failed to fetch roles:', error);
+      addToast('error', 'Failed to fetch roles. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -124,6 +157,7 @@ export default function RolesAndAccess() {
     }
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
+      addToast('error', 'Please fix the validation errors');
       return;
     }
 
@@ -145,7 +179,7 @@ export default function RolesAndAccess() {
       });
 
       if (response.ok) {
-        alert(`Role ${editingRole ? 'updated' : 'created'} successfully`);
+        addToast('success', `Role ${editingRole ? 'updated' : 'created'} successfully`);
         setShowModal(false);
         setEditingRole(null);
         setFormData({
@@ -154,15 +188,18 @@ export default function RolesAndAccess() {
           permissions: { ...defaultPermissions },
           sidebarPermissions: [],
           pagePermissions: [],
+          canApprove: false,
         });
         fetchRoles();
       } else {
         const error = await response.json();
         setErrors({ submit: error.error || 'Operation failed' });
+        addToast('error', error.error || 'Operation failed');
       }
     } catch (error) {
       console.error('Failed to save role:', error);
       setErrors({ submit: 'Failed to save role' });
+      addToast('error', 'Failed to save role. Please try again.');
     }
   };
 
@@ -174,6 +211,7 @@ export default function RolesAndAccess() {
       permissions: { ...defaultPermissions, ...role.permissions },
       sidebarPermissions: role.sidebarPermissions || [],
       pagePermissions: role.pagePermissions || [],
+      canApprove: role.canApprove || false,
     });
     setShowModal(true);
   };
@@ -182,24 +220,23 @@ export default function RolesAndAccess() {
     setViewingRole(role);
   };
 
-  const handleDelete = async (roleId: string, roleName: string) => {
+  const handleDelete = (roleId: string, roleName: string) => {
     const roleToDelete = roles.find(r => r.id === roleId);
     if (!roleToDelete) return;
 
     // Check if role has assigned users BEFORE showing confirmation
     if (roleToDelete.usersCount > 0) {
-      alert(
-        `Cannot delete role "${roleName}".\\n\\n` +
-        `This role has ${roleToDelete.usersCount} employee(s) assigned.\\n\\n` +
-        `Please remove all employees from this role before deleting it.`
+      addToast('error', 
+        `Cannot delete role "${roleName}". This role has ${roleToDelete.usersCount} employee(s) assigned. Please remove all employees from this role before deleting it.`,
+        8000
       );
       return;
     }
 
-    if (!confirm(`Are you sure you want to delete the role "${roleName}"?`)) {
-      return;
-    }
+    setShowDeleteConfirm({ id: roleId, name: roleName });
+  };
 
+  const confirmDelete = async (roleId: string, roleName: string) => {
     try {
       const token = localStorage.getItem('auth-token');
       const response = await fetch(`/api/admin/roles/${roleId}`, {
@@ -208,16 +245,18 @@ export default function RolesAndAccess() {
       });
 
       if (response.ok) {
-        alert('Role deleted successfully');
+        addToast('success', `Role "${roleName}" deleted successfully`);
+        setShowDeleteConfirm(null);
         fetchRoles();
       } else {
         const error = await response.json();
-        // Show detailed error message from server
-        alert(error.error || 'Failed to delete role');
+        addToast('error', error.error || 'Failed to delete role');
+        setShowDeleteConfirm(null);
       }
     } catch (error) {
       console.error('Failed to delete role:', error);
-      alert('Failed to delete role. Please try again.');
+      addToast('error', 'Failed to delete role. Please try again.');
+      setShowDeleteConfirm(null);
     }
   };
 
@@ -265,6 +304,75 @@ export default function RolesAndAccess() {
 
   return (
     <div className="space-y-6">
+      {/* Toast Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`flex items-center p-4 rounded-lg shadow-lg max-w-md transform transition-all duration-300 animate-slide-in ${
+              toast.type === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
+              toast.type === 'error' ? 'bg-red-50 border-l-4 border-red-500' :
+              toast.type === 'warning' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
+              'bg-blue-50 border-l-4 border-blue-500'
+            }`}
+          >
+            <div className="flex-shrink-0">
+              {toast.type === 'success' && <CheckCircleIcon className="w-5 h-5 text-green-400" />}
+              {toast.type === 'error' && <XCircleIcon className="w-5 h-5 text-red-400" />}
+              {toast.type === 'warning' && <ExclamationTriangleIcon className="w-5 h-5 text-yellow-400" />}
+              {toast.type === 'info' && <InformationCircleIcon className="w-5 h-5 text-blue-400" />}
+            </div>
+            <div className="ml-3 flex-1">
+              <p className={`text-sm font-medium ${
+                toast.type === 'success' ? 'text-green-800' :
+                toast.type === 'error' ? 'text-red-800' :
+                toast.type === 'warning' ? 'text-yellow-800' :
+                'text-blue-800'
+              }`}>
+                {toast.message}
+              </p>
+            </div>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="ml-4 flex-shrink-0 text-gray-400 hover:text-gray-600"
+            >
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full">
+              <ExclamationTriangleIcon className="w-6 h-6 text-red-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Confirm Delete
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Are you sure you want to delete the role "{showDeleteConfirm.name}"? This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={() => setShowDeleteConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmDelete(showDeleteConfirm.id, showDeleteConfirm.name)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -282,6 +390,7 @@ export default function RolesAndAccess() {
               permissions: { ...defaultPermissions },
               sidebarPermissions: [],
               pagePermissions: [],
+              canApprove: false,
             });
             setShowModal(true);
           }}
@@ -328,12 +437,12 @@ export default function RolesAndAccess() {
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Users</p>
+              <p className="text-sm font-medium text-gray-600">Can Approve</p>
               <p className="text-2xl font-bold text-gray-900">
-                {roles.reduce((sum, role) => sum + role.usersCount, 0)}
+                {roles.filter(r => r.canApprove).length}
               </p>
             </div>
-            <UsersIcon className="w-8 h-8 text-purple-500" />
+            <CheckBadgeIcon className="w-8 h-8 text-purple-500" />
           </div>
         </div>
       </div>
@@ -385,6 +494,11 @@ export default function RolesAndAccess() {
                   {role.isDefault && (
                     <span className="inline-flex items-center px-2 py-1 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full">
                       Default
+                    </span>
+                  )}
+                  {role.canApprove && (
+                    <span className="inline-flex items-center px-2 py-1 text-xs font-semibold bg-purple-100 text-purple-800 rounded-full">
+                      Can Approve
                     </span>
                   )}
                 </div>
@@ -520,12 +634,14 @@ export default function RolesAndAccess() {
               permissions: { ...defaultPermissions },
               sidebarPermissions: [],
               pagePermissions: [],
+              canApprove: false,
             });
             setErrors({});
           }}
           onSubmit={handleSubmit}
           onPermissionChange={handlePermissionChange}
           onSelectAll={handleSelectAll}
+          addToast={addToast}
         />
       )}
 
@@ -549,6 +665,7 @@ export default function RolesAndAccess() {
             setAssigningRole(null);
           }}
           onSaved={() => fetchRoles()}
+          addToast={addToast}
         />
       )}
     </div>
@@ -564,7 +681,8 @@ function RoleModal({
   onClose, 
   onSubmit, 
   onPermissionChange, 
-  onSelectAll 
+  onSelectAll,
+  addToast 
 }: {
   role: Role | null;
   formData: any;
@@ -574,6 +692,7 @@ function RoleModal({
   onSubmit: (e: React.FormEvent) => void;
   onPermissionChange: (module: string, action: string, checked: boolean) => void;
   onSelectAll: (module: string, selected: boolean) => void;
+  addToast: (type: Toast['type'], message: string, duration?: number) => void;
 }) {
   const [activeTab, setActiveTab] = useState<'basic' | 'permissions' | 'menus' | 'pages'>('basic');
 
@@ -615,6 +734,7 @@ function RoleModal({
       ...formData, 
       sidebarPermissions: selected ? allMenus.map(m => m.id) : [] 
     });
+    addToast('info', selected ? 'All menus selected' : 'All menus deselected');
   };
 
   const selectAllPages = (selected: boolean) => {
@@ -622,6 +742,7 @@ function RoleModal({
       ...formData, 
       pagePermissions: selected ? allMenus.map(m => m.id) : [] 
     });
+    addToast('info', selected ? 'All pages selected' : 'All pages deselected');
   };
 
   return (
@@ -717,6 +838,39 @@ function RoleModal({
                     placeholder="Describe the role and its responsibilities..."
                   />
                 </div>
+
+                {/* Can Approve Toggle */}
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-medium text-purple-900">Can Approve Leave Requests</h4>
+                      <p className="text-sm text-purple-700 mt-1">
+                        Enable this option to allow users with this role to approve/reject leave requests.
+                        They will appear in the approver dropdown when employees request leave.
+                      </p>
+                    </div>
+                    <div className="flex items-center">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, canApprove: !formData.canApprove })}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
+                          formData.canApprove ? 'bg-purple-600' : 'bg-gray-200'
+                        }`}
+                        role="switch"
+                        aria-checked={formData.canApprove}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            formData.canApprove ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                      <span className="ml-3 text-sm font-medium text-purple-900">
+                        {formData.canApprove ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -725,6 +879,7 @@ function RoleModal({
                   <li>• <strong>Sidebar Menus:</strong> Controls which menu items are visible in the sidebar</li>
                   <li>• <strong>Page Access:</strong> Controls which pages the user can access (navigation guards)</li>
                   <li>• <strong>Action Permissions:</strong> Controls what actions (view, create, edit, delete) the user can perform</li>
+                  <li>• <strong>Can Approve:</strong> Controls if users with this role can approve leave requests (appear in approver dropdown)</li>
                   <li>• <strong>Admin Role:</strong> Has full access to all menus, pages, and actions by default</li>
                 </ul>
               </div>
@@ -983,6 +1138,22 @@ function ViewRoleModal({ role, onClose, onEdit }: {
               </div>
             </div>
             <div>
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Can Approve Leave</h3>
+              <div className="flex items-center">
+                {role.canApprove ? (
+                  <>
+                    <CheckCircleIcon className="w-4 h-4 text-green-500 mr-1" />
+                    <span className="text-sm text-gray-900">Yes</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircleIcon className="w-4 h-4 text-red-500 mr-1" />
+                    <span className="text-sm text-gray-900">No</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div>
               <h3 className="text-sm font-medium text-gray-700 mb-2">Created</h3>
               <p className="text-sm text-gray-900">
                 {new Date(role.createdAt).toLocaleDateString()}
@@ -1057,7 +1228,12 @@ function ViewRoleModal({ role, onClose, onEdit }: {
 }
 
 // Assign Users Modal
-function AssignUsersModal({ role, onClose, onSaved }: { role: Role; onClose: () => void; onSaved: () => void; }) {
+function AssignUsersModal({ role, onClose, onSaved, addToast }: { 
+  role: Role; 
+  onClose: () => void; 
+  onSaved: () => void;
+  addToast: (type: Toast['type'], message: string, duration?: number) => void;
+}) {
   const [users, setUsers] = useState<{ id: string; email: string; firstName: string; lastName: string; position: string; assigned: boolean; currentRole: { id: string; name: string } | null }[]>([]);
   const [originalAssigned, setOriginalAssigned] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -1078,16 +1254,19 @@ function AssignUsersModal({ role, onClose, onSaved }: { role: Role; onClose: () 
           const list = data.users || [];
           setUsers(list);
           setOriginalAssigned(new Set(list.filter((u: any) => u.assigned).map((u: any) => u.id)));
+        } else {
+          const error = await res.json();
+          addToast('error', error.error || 'Failed to fetch users');
         }
       } catch (e) {
         console.error('Failed to fetch users for role:', e);
-        alert('Failed to load employees');
+        addToast('error', 'Failed to load employees');
       } finally {
         setLoading(false);
       }
     };
     fetchUsers();
-  }, [role]);
+  }, [role, addToast]);
 
   const toggle = (id: string) => {
     const user = users.find(u => u.id === id);
@@ -1095,11 +1274,9 @@ function AssignUsersModal({ role, onClose, onSaved }: { role: Role; onClose: () 
 
     // If assigning and user has a different role, show confirmation
     if (!user.assigned && user.currentRole && user.currentRole.id !== role.id) {
-      const confirmed = confirm(
-        `${user.firstName} ${user.lastName} is currently assigned to "${user.currentRole.name}".\n\n` +
-        `Assigning to "${role.name}" will remove them from "${user.currentRole.name}".\n\nContinue?`
-      );
-      if (!confirmed) return;
+      if (!confirm(`${user.firstName} ${user.lastName} is currently assigned to "${user.currentRole.name}".\n\nAssigning to "${role.name}" will remove them from "${user.currentRole.name}".\n\nContinue?`)) {
+        return;
+      }
     }
 
     setUsers(prev => prev.map(u => u.id === id ? { ...u, assigned: !u.assigned } : u));
@@ -1111,6 +1288,7 @@ function AssignUsersModal({ role, onClose, onSaved }: { role: Role; onClose: () 
     setUsers(prev => prev.map(u => 
       filteredIds.has(u.id) ? { ...u, assigned: selected } : u
     ));
+    addToast('info', selected ? 'All filtered users selected' : 'All filtered users deselected');
   };
 
   const handleSave = async () => {
@@ -1140,15 +1318,15 @@ function AssignUsersModal({ role, onClose, onSaved }: { role: Role; onClose: () 
 
       const failed = results.filter(r => r.status === 'rejected');
       if (failed.length > 0) {
-        alert(`Failed to save ${failed.length} assignment(s). Please try again.`);
+        addToast('error', `Failed to save ${failed.length} assignment(s). Please try again.`);
       } else {
-        alert('Assignments saved successfully');
+        addToast('success', `Role assignments saved successfully for ${toAssign.length + toUnassign.length} user(s)`);
         onSaved();
         onClose();
       }
     } catch (e) {
       console.error('Failed to save role assignments:', e);
-      alert('Failed to save assignments');
+      addToast('error', 'Failed to save assignments');
     } finally {
       setSaving(false);
     }

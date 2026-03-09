@@ -11,6 +11,7 @@ const createRoleSchema = z.object({
   permissions: z.record(z.record(z.boolean())),
   sidebarPermissions: z.array(z.string()).optional().default([]),
   pagePermissions: z.array(z.string()).optional().default([]),
+  canApprove: z.boolean().optional().default(false),
 });
 
 // GET /api/admin/roles - Get all roles with user counts
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
         isDefault: roles.isDefault,
         isSystem: roles.isSystem,
         usersCount: roles.usersCount,
+        canApprove: roles.canApprove,
         createdAt: roles.createdAt,
         updatedAt: roles.updatedAt,
       })
@@ -60,6 +62,7 @@ export async function GET(request: NextRequest) {
           isDefault: r.isDefault,
           isSystem: r.isSystem,
           usersCount: r.usersCount ?? 0,
+          canApprove: r.canApprove ?? false,
           createdAt: r.createdAt,
           updatedAt: r.updatedAt ?? r.createdAt,
         };
@@ -105,6 +108,7 @@ export async function POST(request: NextRequest) {
         isDefault: false,
         isSystem: false,
         usersCount: 0,
+        canApprove: validatedData.canApprove,
       })
       .returning();
 

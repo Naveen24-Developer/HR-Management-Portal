@@ -18,6 +18,8 @@ import {
   UserCircleIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  XMarkIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 
 
@@ -76,6 +78,7 @@ interface Approver {
   position: string;
   employeeId: string;
   role: string;
+  roleName?: string;
 }
 
 interface UserInfo {
@@ -114,6 +117,13 @@ interface DateRange {
   endDate: string;
 }
 
+interface Toast {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  message: string;
+  duration?: number;
+}
+
 export default function LeaveManagement() {
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [stats, setStats] = useState<LeaveStats>({
@@ -143,7 +153,12 @@ export default function LeaveManagement() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [showApproveConfirm, setShowApproveConfirm] = useState<string | null>(null);
+  const [showRejectModal, setShowRejectModal] = useState<{id: string, show: boolean}>({ id: '', show: false });
+  const [rejectReason, setRejectReason] = useState('');
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [pagination, setPagination] = useState<Pagination>({
     page: 1,
     limit: 10,
@@ -193,6 +208,20 @@ export default function LeaveManagement() {
   const canDelete = userInfo?.permissions?.leave?.delete;
   const canViewAll = userInfo?.permissions?.leave?.view;
 
+  // Toast functions
+  const addToast = (type: Toast['type'], message: string, duration = 5000) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts(prev => [...prev, { id, type, message, duration }]);
+    
+    setTimeout(() => {
+      removeToast(id);
+    }, duration);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  };
+
   useEffect(() => {
     fetchLeaveRequests();
     fetchLeaveStats();
@@ -231,10 +260,13 @@ export default function LeaveManagement() {
         const data = await response.json();
         setLeaveRequests(data.leaveRequests);
         setPagination(data.pagination);
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to load leave requests');
       }
     } catch (error) {
       console.error('Failed to fetch leave requests:', error);
-      alert('Failed to load leave requests');
+      addToast('error', 'Failed to load leave requests. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -250,6 +282,9 @@ export default function LeaveManagement() {
       if (response.ok) {
         const data = await response.json();
         setStats(data.stats);
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch leave stats');
       }
     } catch (error) {
       console.error('Failed to fetch leave stats:', error);
@@ -266,9 +301,13 @@ export default function LeaveManagement() {
       if (response.ok) {
         const data = await response.json();
         setEmployees(data.employees);
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch employees');
       }
     } catch (error) {
       console.error('Failed to fetch employees:', error);
+      addToast('error', 'Failed to fetch employees. Please try again.');
     }
   };
 
@@ -286,11 +325,11 @@ export default function LeaveManagement() {
       } else {
         const errorData = await response.json();
         console.error('Failed to fetch approvers - API Error:', errorData);
-        alert(`Failed to load approvers: ${errorData.error || 'Unknown error'}`);
+        addToast('error', `Failed to load approvers: ${errorData.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error('Failed to fetch approvers:', error);
-      alert('Failed to load approvers. Please check console for details.');
+      addToast('error', 'Failed to load approvers. Please check console for details.');
     }
   };
 
@@ -304,6 +343,9 @@ export default function LeaveManagement() {
       if (response.ok) {
         const data = await response.json();
         setUserInfo(data.user);
+      } else {
+        const error = await response.json();
+        addToast('error', error.error || 'Failed to fetch user info');
       }
     } catch (error) {
       console.error('Failed to fetch user info:', error);
@@ -311,10 +353,10 @@ export default function LeaveManagement() {
   };
 
   const handleApprove = async (requestId: string) => {
-    if (!confirm('Are you sure you want to approve this leave request?')) {
-      return;
-    }
+    setShowApproveConfirm(requestId);
+  };
 
+  const confirmApprove = async (requestId: string) => {
     try {
       const token = localStorage.getItem('auth-token');
       const response = await fetch(`/api/admin/leave/${requestId}/approve`, {
@@ -325,28 +367,34 @@ export default function LeaveManagement() {
       if (response.ok) {
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave request approved successfully');
+        addToast('success', 'Leave request approved successfully');
+        setShowApproveConfirm(null);
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to approve leave request');
+        addToast('error', error.error || 'Failed to approve leave request');
+        setShowApproveConfirm(null);
       }
     } catch (error) {
       console.error('Failed to approve leave request:', error);
-      alert('Failed to approve leave request');
+      addToast('error', 'Failed to approve leave request. Please try again.');
+      setShowApproveConfirm(null);
     }
   };
 
-  const handleReject = async (requestId: string) => {
-    const rejectReason = prompt('Please enter rejection reason:', '');
-    if (rejectReason === null) return;
+  const handleReject = (requestId: string) => {
+    setShowRejectModal({ id: requestId, show: true });
+    setRejectReason('');
+  };
+
+  const confirmReject = async () => {
     if (!rejectReason.trim()) {
-      alert('Rejection reason is required');
+      addToast('error', 'Rejection reason is required');
       return;
     }
 
     try {
       const token = localStorage.getItem('auth-token');
-      const response = await fetch(`/api/admin/leave/${requestId}/reject`, {
+      const response = await fetch(`/api/admin/leave/${showRejectModal.id}/reject`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -358,14 +406,16 @@ export default function LeaveManagement() {
       if (response.ok) {
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave request rejected successfully');
+        addToast('success', 'Leave request rejected successfully');
+        setShowRejectModal({ id: '', show: false });
+        setRejectReason('');
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to reject leave request');
+        addToast('error', error.error || 'Failed to reject leave request');
       }
     } catch (error) {
       console.error('Failed to reject leave request:', error);
-      alert('Failed to reject leave request');
+      addToast('error', 'Failed to reject leave request. Please try again.');
     }
   };
 
@@ -374,7 +424,7 @@ export default function LeaveManagement() {
     
     // Validate dates
     if (!createForm.startDate || !createForm.endDate) {
-      alert('Please select both start and end dates');
+      addToast('error', 'Please select both start and end dates');
       return;
     }
 
@@ -382,13 +432,13 @@ export default function LeaveManagement() {
     const endDate = new Date(createForm.endDate);
     
     if (endDate < startDate) {
-      alert('End date cannot be before start date');
+      addToast('error', 'End date cannot be before start date');
       return;
     }
 
     // Validate approver selection (for non-admin employees only)
     if (userInfo?.role !== 'admin' && !createForm.approverId) {
-      alert('Please select an approver for your leave request');
+      addToast('error', 'Please select an approver for your leave request');
       return;
     }
 
@@ -419,13 +469,13 @@ export default function LeaveManagement() {
         });
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave request submitted successfully');
+        addToast('success', 'Leave request submitted successfully');
       } else {
-        alert(data.error || 'Failed to submit leave request');
+        addToast('error', data.error || 'Failed to submit leave request');
       }
     } catch (error) {
       console.error('Failed to create leave request:', error);
-      alert('Failed to submit leave request');
+      addToast('error', 'Failed to submit leave request. Please try again.');
     }
   };
 
@@ -434,12 +484,12 @@ export default function LeaveManagement() {
     
     // Validate form
     if (!manualForm.employeeId) {
-      alert('Please select an employee');
+      addToast('error', 'Please select an employee');
       return;
     }
     
     if (!manualForm.startDate || !manualForm.endDate) {
-      alert('Please select both start and end dates');
+      addToast('error', 'Please select both start and end dates');
       return;
     }
 
@@ -447,12 +497,12 @@ export default function LeaveManagement() {
     const endDate = new Date(manualForm.endDate);
     
     if (endDate < startDate) {
-      alert('End date cannot be before start date');
+      addToast('error', 'End date cannot be before start date');
       return;
     }
 
     if (manualForm.days <= 0) {
-      alert('Number of days must be greater than 0');
+      addToast('error', 'Number of days must be greater than 0');
       return;
     }
 
@@ -484,21 +534,21 @@ export default function LeaveManagement() {
         });
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave action completed successfully');
+        addToast('success', 'Leave action completed successfully');
       } else {
-        alert(data.error || 'Failed to process leave action');
+        addToast('error', data.error || 'Failed to process leave action');
       }
     } catch (error) {
       console.error('Failed to process manual leave action:', error);
-      alert('Failed to process leave action');
+      addToast('error', 'Failed to process leave action. Please try again.');
     }
   };
 
-  const handleDelete = async (requestId: string) => {
-    if (!confirm('Are you sure you want to delete this leave request?')) {
-      return;
-    }
+  const handleDelete = (requestId: string) => {
+    setShowDeleteConfirm(requestId);
+  };
 
+  const confirmDelete = async (requestId: string) => {
     try {
       const token = localStorage.getItem('auth-token');
       const response = await fetch(`/api/admin/leave/requests/${requestId}`, {
@@ -509,14 +559,17 @@ export default function LeaveManagement() {
       if (response.ok) {
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave request deleted successfully');
+        addToast('success', 'Leave request deleted successfully');
+        setShowDeleteConfirm(null);
       } else {
         const error = await response.json();
-        alert(error.error || 'Failed to delete leave request');
+        addToast('error', error.error || 'Failed to delete leave request');
+        setShowDeleteConfirm(null);
       }
     } catch (error) {
       console.error('Failed to delete leave request:', error);
-      alert('Failed to delete leave request');
+      addToast('error', 'Failed to delete leave request. Please try again.');
+      setShowDeleteConfirm(null);
     }
   };
 
@@ -540,7 +593,7 @@ export default function LeaveManagement() {
 
     // Validate dates
     if (!editForm.startDate || !editForm.endDate) {
-      alert('Please select both start and end dates');
+      addToast('error', 'Please select both start and end dates');
       return;
     }
 
@@ -548,7 +601,7 @@ export default function LeaveManagement() {
     const endDate = new Date(editForm.endDate);
     
     if (endDate < startDate) {
-      alert('End date cannot be before start date');
+      addToast('error', 'End date cannot be before start date');
       return;
     }
 
@@ -589,13 +642,13 @@ export default function LeaveManagement() {
         });
         fetchLeaveRequests();
         fetchLeaveStats();
-        alert('Leave request updated successfully');
+        addToast('success', 'Leave request updated successfully');
       } else {
-        alert(data.error || 'Failed to update leave request');
+        addToast('error', data.error || 'Failed to update leave request');
       }
     } catch (error) {
       console.error('Failed to update leave request:', error);
-      alert('Failed to update leave request');
+      addToast('error', 'Failed to update leave request. Please try again.');
     }
   };
 
@@ -661,12 +714,12 @@ export default function LeaveManagement() {
     
     // Validate that end date is not before start date
     if (type === 'startDate' && newDateRange.endDate && value > newDateRange.endDate) {
-      alert('Start date cannot be after end date');
+      addToast('error', 'Start date cannot be after end date');
       return;
     }
     
     if (type === 'endDate' && newDateRange.startDate && value < newDateRange.startDate) {
-      alert('End date cannot be before start date');
+      addToast('error', 'End date cannot be before start date');
       return;
     }
     
@@ -758,6 +811,152 @@ export default function LeaveManagement() {
 
   return (
     <div className="space-y-6">
+      {/* Toast Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`flex items-center p-4 rounded-lg shadow-lg max-w-md transform transition-all duration-300 animate-slide-in ${
+              toast.type === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
+              toast.type === 'error' ? 'bg-red-50 border-l-4 border-red-500' :
+              toast.type === 'warning' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
+              'bg-blue-50 border-l-4 border-blue-500'
+            }`}
+          >
+            <div className="flex-shrink-0">
+              {toast.type === 'success' && <CheckCircleIcon className="w-5 h-5 text-green-400" />}
+              {toast.type === 'error' && <XCircleIcon className="w-5 h-5 text-red-400" />}
+              {toast.type === 'warning' && <ExclamationTriangleIcon className="w-5 h-5 text-yellow-400" />}
+              {toast.type === 'info' && <InformationCircleIcon className="w-5 h-5 text-blue-400" />}
+            </div>
+            <div className="ml-3 flex-1">
+              <p className={`text-sm font-medium ${
+                toast.type === 'success' ? 'text-green-800' :
+                toast.type === 'error' ? 'text-red-800' :
+                toast.type === 'warning' ? 'text-yellow-800' :
+                'text-blue-800'
+              }`}>
+                {toast.message}
+              </p>
+            </div>
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="ml-4 flex-shrink-0 text-gray-400 hover:text-gray-600"
+            >
+              <XMarkIcon className="w-5 h-5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full">
+              <ExclamationTriangleIcon className="w-6 h-6 text-red-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Confirm Delete
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Are you sure you want to delete this leave request? This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={() => setShowDeleteConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmDelete(showDeleteConfirm)}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Approve Confirmation Modal */}
+      {showApproveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-green-100 rounded-full">
+              <CheckCircleIcon className="w-6 h-6 text-green-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Confirm Approval
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Are you sure you want to approve this leave request?
+            </p>
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={() => setShowApproveConfirm(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmApprove(showApproveConfirm)}
+                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors"
+              >
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Modal */}
+      {showRejectModal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-100 rounded-full">
+              <XCircleIcon className="w-6 h-6 text-red-600" />
+            </div>
+            <h3 className="mt-4 text-lg font-medium text-center text-gray-900">
+              Reject Leave Request
+            </h3>
+            <p className="mt-2 text-sm text-center text-gray-500">
+              Please provide a reason for rejection
+            </p>
+            
+            <div className="mt-4">
+              <textarea
+                rows={4}
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-red-500 focus:border-red-500"
+                placeholder="Enter rejection reason..."
+                autoFocus
+              />
+            </div>
+
+            <div className="mt-6 flex justify-center space-x-3">
+              <button
+                onClick={() => {
+                  setShowRejectModal({ id: '', show: false });
+                  setRejectReason('');
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReject}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -926,7 +1125,6 @@ export default function LeaveManagement() {
           
           {/* Date Range Filter */}
           <div className="flex items-center space-x-2">
-            <CalendarIcon className="w-5 h-5 text-gray-400" />
             <input
               type="date"
               value={dateRange.startDate}
@@ -945,7 +1143,9 @@ export default function LeaveManagement() {
             />
           </div>
           
-          <button
+        </div>
+        <div className="mt-4 text-right">
+        <button
             onClick={() => {
               setSearchQuery('');
               setStatusFilter('');
@@ -954,12 +1154,12 @@ export default function LeaveManagement() {
               setEmployeeFilter('');
               setPagination({ ...pagination, page: 1 });
             }}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-300 rounded-md hover:bg-gray-700 hover:text-white"
           >
             Clear Filters
           </button>
-        </div>
-        
+          </div>
+
         {/* Active Filters Display */}
         {(dateRange.startDate || dateRange.endDate) && (
           <div className="mt-2 flex items-center space-x-2">
@@ -1304,12 +1504,22 @@ export default function LeaveManagement() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                   >
                     <option value="">-- Select Approver --</option>
-                    {approvers.map((approver) => (
-                      <option key={approver.id} value={approver.id}>
-                        {approver.fullName} - {approver.position} ({approver.role})
-                      </option>
-                    ))}
+                    {approvers.length > 0 ? (
+                      approvers.map((approver) => (
+                        <option key={approver.id} value={approver.id}>
+                          {approver.fullName} - {approver.position} 
+                          {approver.roleName && ` (${approver.roleName})`}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>No approvers available</option>
+                    )}
                   </select>
+                  {approvers.length === 0 && (
+                    <p className="text-xs text-red-500 mt-1">
+                      No approvers found. Please contact your administrator.
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500 mt-1">
                     Select the person who will approve your leave request
                   </p>
@@ -1468,12 +1678,22 @@ export default function LeaveManagement() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500"
                   >
                     <option value="">-- Select Approver --</option>
-                    {approvers.map((approver) => (
-                      <option key={approver.id} value={approver.id}>
-                        {approver.fullName} - {approver.position} ({approver.role})
-                      </option>
-                    ))}
+                    {approvers.length > 0 ? (
+                      approvers.map((approver) => (
+                        <option key={approver.id} value={approver.id}>
+                          {approver.fullName} - {approver.position}
+                          {approver.roleName && ` (${approver.roleName})`}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>No approvers available</option>
+                    )}
                   </select>
+                  {approvers.length === 0 && (
+                    <p className="text-xs text-red-500 mt-1">
+                      No approvers found. Please contact your administrator.
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500 mt-1">
                     Select the person who will approve your leave request
                   </p>
